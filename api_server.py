@@ -2,12 +2,12 @@ import logging
 import json
 import os
 import pandas as pd
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from stock_analyzer import StockAnalysisSystem
 import yfinance as yf
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)  # אפשר גישה מ-frontend
 
 # יצירת מופע של מערכת הניתוח
@@ -38,21 +38,17 @@ def get_market_stocks(limit=50):
 
 @app.route('/')
 def home():
-    """דף בית"""
-    return jsonify({
-        "message": "Stock Analysis API",
-        "version": "1.0",
-        "endpoints": [
-            "/api/analyze/<symbol>",
-            "/api/compare",
-            "/api/health"
-        ]
-    })
+    """הגשת דף הבית (Frontend)"""
+    return send_from_directory('.', 'index.html')
 
 @app.route('/api/health')
 def health():
-    """בדיקת תקינות"""
-    return jsonify({"status": "healthy"})
+    """בדיקת תקינות המערכת"""
+    return jsonify({
+        "status": "healthy",
+        "message": "Stock Analysis API is running",
+        "version": "1.0"
+    })
 
 @app.route('/api/analyze/<symbol>')
 def analyze_stock(symbol):
