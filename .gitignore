@@ -1,0 +1,9 @@
+scan_cache.json
+__pycache__/
+*.pyc
+.env
+.gemini/
+.idea/
+.vscode/
+venv/
+node_modules/

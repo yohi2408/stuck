@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מערכת ניתוח מניות | Stock Analysis System</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="title">📈 מערכת ניתוח מניות מתקדמת</h1>
+                <p class="subtitle">ניתוח טכני ופונדמנטלי | המלצות השקעה חכמות | תחזיות מבוססות AI</p>
+            </div>
+        </header>
+
+        <!-- Search Section -->
+        <section class="search-section">
+            <div class="search-container">
+                <input type="text" id="stockSymbol" class="search-input"
+                    placeholder="הכנס סימול מניה (לדוגמה: AAPL, MSFT, GOOGL)" dir="ltr">
+                <button id="analyzeBtn" class="btn-primary">
+                    🔍 נתח מניה
+                </button>
+            </div>
+            <div class="quick-picks">
+                <span class="quick-label">בחירות מהירות:</span>
+                <button class="quick-btn" data-symbol="AAPL">Apple</button>
+                <button class="quick-btn" data-symbol="MSFT">Microsoft</button>
+                <button class="quick-btn" data-symbol="GOOGL">Google</button>
+                <button class="quick-btn" data-symbol="NVDA">NVIDIA</button>
+                <button class="quick-btn" data-symbol="TSLA">Tesla</button>
+            </div>
+        </section>
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <p>מנתח נתונים...</p>
+        </div>
+
+        <!-- Error Message -->
+        <div id="errorMsg" class="error-msg hidden"></div>
+
+        <!-- Main Dashboard -->
+        <div id="dashboard" class="dashboard hidden">
+            <!-- Stock Header -->
+            <div class="stock-header">
+                <div class="stock-header-main">
+                    <h2 id="stockName" class="stock-name"></h2>
+                    <h1 id="currentPrice" class="stock-price">$0.00</h1>
+                    <!-- Live Indicator Hardcoded -->
+                    <div id="liveIndicator" class="live-indicator" style="display: none;">
+                        <span class="live-dot"></span> LIVE
+                    </div>
+                </div>
+                <p id="stockSymbolDisplay" class="stock-symbol"></p>
+                <div class="price-info">
+                    <div class="price-change" id="priceChange"></div>
+                </div>
+
+                <!-- Performance Bar -->
+                <div class="performance-bar" id="performanceBar">
+                    <!-- Items will be injected by JS -->
+                </div>
+            </div>
+
+            <!-- ניתוח מפורט בעברית - NEW! -->
+            <div class="detailed-analysis-section">
+                <h3>📊 ניתוח מעמיק ותחזית</h3>
+                <div id="detailedAnalysis" class="detailed-analysis-content">
+                    <p class="loading-text">טוען ניתוח מפורט...</p>
+                </div>
+            </div>
+
+            <!-- Recommendations Cards -->
+            <div class="recommendations-grid">
+                <!-- Short Term Card -->
+                <div class="rec-card">
+                    <div class="rec-header">
+                        <span class="rec-icon">⚡</span>
+                        <h3>טווח קצר (1-3 חודשים)</h3>
+                    </div>
+                    <div class="rec-content">
+                        <div class="rec-badge" id="shortTermRec"></div>
+                        <div class="rec-confidence" id="shortTermConf"></div>
+                    </div>
+                </div>
+
+                <!-- Long Term Card -->
+                <div class="rec-card">
+                    <div class="rec-header">
+                        <span class="rec-icon">🎯</span>
+                        <h3>טווח ארוך (6-12 חודשים)</h3>
+                    </div>
+                    <div class="rec-content">
+                        <div class="rec-badge" id="longTermRec"></div>
+                    </div>
+                </div>
+
+                <!-- Risk Card -->
+                <div class="rec-card">
+                    <div class="rec-header">
+                        <span class="rec-icon">⚠️</span>
+                        <h3>רמת סיכון</h3>
+                    </div>
+                    <div class="rec-content">
+                        <div class="risk-badge" id="riskLevel"></div>
+                        <div class="risk-details" id="riskDetails"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analysis Details -->
+            <div class="analysis-section">
+                <div class="analysis-grid">
+                    <!-- Technical Analysis -->
+                    <div class="analysis-card">
+                        <h3>📊 ניתוח טכני</h3>
+                        <div class="analysis-content">
+                            <div class="metric">
+                                <span class="metric-label">מגמה:</span>
+                                <span class="metric-value" id="trend"></span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">מומנטום:</span>
+                                <span class="metric-value" id="momentum"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Fundamental Analysis -->
+                    <div class="analysis-card">
+                        <h3>💼 ניתוח פונדמנטלי</h3>
+                        <div class="analysis-content">
+                            <div class="metric">
+                                <span class="metric-label">P/E Ratio:</span>
+                                <span class="metric-value" id="peRatio"></span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">שווי שוק:</span>
+                                <span class="metric-value" id="marketCap"></span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Beta:</span>
+                                <span class="metric-value" id="beta"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Price Stats -->
+                    <div class="analysis-card">
+                        <h3>💰 סטטיסטיקות מחיר</h3>
+                        <div class="analysis-content">
+                            <div class="metric">
+                                <span class="metric-label">שינוי 30 יום:</span>
+                                <span class="metric-value" id="change30d"></span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">גבוה 52 שבועות:</span>
+                                <span class="metric-value" id="high52w"></span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">נמוך 52 שבועות:</span>
+                                <span class="metric-value" id="low52w"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chart Section -->
+            <div class="chart-section">
+                <h3>📈 גרף מחירים (90 ימים אחרונים)</h3>
+                <div class="chart-container">
+                    <canvas id="priceChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Explanation -->
+            <div class="explanation-section">
+                <h3>💡 הסבר</h3>
+                <p id="explanation"></p>
+            </div>
+        </div>
+
+        <!-- Top Recommendations Section -->
+        <section class="top-recommendations">
+            <h2>🔍 סריקת שוק והמלצות</h2>
+            <p class="subtitle">המערכת סורקת את מניות ה-S&P 500 ומנתחת אותן בזמן אמת</p>
+            <button id="loadRecommendations" class="btn-secondary">התחל סריקת שוק</button>
+            <div id="recommendationsList" class="recommendations-list"></div>
+        </section>
+    </div>
+
+    <footer class="footer">
+        <p>⚠️ אזהרה: מערכת זו מספקת מידע לצרכי מחקר בלבד ואינה מהווה ייעוץ השקעות. התייעץ עם יועץ פיננסי מוסמך לפני קבלת
+            החלטות השקעה.</p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

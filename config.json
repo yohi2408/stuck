@@ -1,0 +1,23 @@
+{
+    "api_key": "5Y77AYI6OPCNOEX5",
+    "finnhub_key": "d63mif9r01ql6dj0l350d63mif9r01ql6dj0l35g",
+    "api_provider": "finnhub",
+    "analysis_parameters": {
+        "short_term_days": 90,
+        "long_term_days": 365,
+        "sma_short": 20,
+        "sma_long": 50,
+        "rsi_period": 14,
+        "rsi_oversold": 30,
+        "rsi_overbought": 70,
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "macd_signal": 9
+    },
+    "risk_thresholds": {
+        "low_volatility": 0.02,
+        "high_volatility": 0.05,
+        "low_beta": 0.8,
+        "high_beta": 1.2
+    }
+}
