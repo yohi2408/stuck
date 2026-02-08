@@ -6,6 +6,8 @@ const API_BASE_URL = window.location.hostname === 'localhost' || window.location
 // Global Chart/Interval instances
 let priceChart = null;
 let priceInterval = null;
+let currentChartType = 'line'; // 'line' or 'candle'
+let currentChartData = null;
 let perfBasePrices = {}; // שמירת מחירי בסיס לחישוב ביצועים בלייב
 
 // --- Event Listeners and Initialization ---
@@ -46,6 +48,24 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 if (symbol) updateChart(symbol, range);
             }
+        });
+    }
+
+    // Chart Type Selector
+    const lineBtn = document.getElementById('lineChartBtn');
+    const candleBtn = document.getElementById('candleChartBtn');
+    if (lineBtn && candleBtn) {
+        lineBtn.addEventListener('click', () => {
+            currentChartType = 'line';
+            lineBtn.classList.add('active');
+            candleBtn.classList.remove('active');
+            if (currentChartData) renderChart(currentChartData);
+        });
+        candleBtn.addEventListener('click', () => {
+            currentChartType = 'candle';
+            candleBtn.classList.add('active');
+            lineBtn.classList.remove('active');
+            if (currentChartData) renderChart(currentChartData);
         });
     }
 });
@@ -388,54 +408,142 @@ function stopLiveUpdates() {
 }
 
 /**
- * Renders the Chart.js line chart
+ * Renders the Chart.js chart (Line or Candlestick)
  */
 function renderChart(chartData) {
     const ctx = document.getElementById('priceChart');
     if (!ctx || !chartData || !chartData.dates) return;
-
-    const labels = chartData.dates.map(d => new Date(d).toLocaleDateString('he-IL'));
+    currentChartData = chartData;
 
     if (priceChart) priceChart.destroy();
 
+    const labels = chartData.dates.map(d => new Date(d).toLocaleDateString('he-IL'));
+    const datasets = [];
+
+    if (currentChartType === 'line') {
+        datasets.push({
+            label: 'מחיר סגירה',
+            data: chartData.prices,
+            borderColor: '#6366f1',
+            backgroundColor: 'rgba(99, 102, 241, 0.1)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.1,
+            pointRadius: 0
+        });
+    } else {
+        // Candlestick rendering using dual floating bars (Body + Wick)
+
+        // 1. Wicks (High/Low) - Thin bars
+        datasets.push({
+            label: 'טווח יומי',
+            data: chartData.candles.map(c => ({
+                x: new Date(c.t).toLocaleDateString('he-IL'),
+                y: [c.l, c.h]
+            })),
+            backgroundColor: '#616161',
+            borderColor: '#616161',
+            borderWidth: 1,
+            barThickness: 2,
+            xAxisId: 'x'
+        });
+
+        // 2. Bodies (Open/Close) - Thick bars
+        datasets.push({
+            label: 'גוף הנר',
+            data: chartData.candles.map(c => ({
+                x: new Date(c.t).toLocaleDateString('he-IL'),
+                y: [c.o, c.c]
+            })),
+            backgroundColor: (ctx) => {
+                const candle = chartData.candles[ctx.index];
+                if (!candle) return '#6366f1';
+                return candle.c >= candle.o ? '#4ade80' : '#f87171';
+            },
+            borderColor: (ctx) => {
+                const candle = chartData.candles[ctx.index];
+                if (!candle) return '#616161';
+                return candle.c >= candle.o ? '#22c55e' : '#ef4444';
+            },
+            borderWidth: 1,
+            barPercentage: 0.7,
+            xAxisId: 'x'
+        });
+    }
+
+    // Add Moving Averages
+    if (chartData.sma_50 && chartData.sma_50.length > 0) {
+        datasets.push({
+            label: 'ממוצע 50',
+            data: chartData.sma_50,
+            borderColor: '#f59e0b',
+            borderWidth: 1,
+            borderDash: [5, 5],
+            pointRadius: 0,
+            fill: false
+        });
+    }
+
+    // Add Support/Resistance Lines
+    if (chartData.support) {
+        datasets.push({
+            label: 'תמיכה (רצפה)',
+            data: Array(labels.length).fill(chartData.support),
+            borderColor: 'rgba(34, 197, 94, 0.4)',
+            borderWidth: 2,
+            borderDash: [10, 5],
+            pointRadius: 0,
+            fill: false
+        });
+    }
+    if (chartData.resistance) {
+        datasets.push({
+            label: 'התנגדות (תקרה)',
+            data: Array(labels.length).fill(chartData.resistance),
+            borderColor: 'rgba(239, 68, 68, 0.4)',
+            borderWidth: 2,
+            borderDash: [10, 5],
+            pointRadius: 0,
+            fill: false
+        });
+    }
+
     priceChart = new Chart(ctx.getContext('2d'), {
-        type: 'line',
+        type: currentChartType === 'candle' ? 'bar' : 'line',
         data: {
             labels: labels,
-            datasets: [
-                {
-                    label: 'מחיר',
-                    data: chartData.prices,
-                    borderColor: '#6366f1',
-                    backgroundColor: 'rgba(99, 102, 241, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.3,
-                    pointRadius: 1
-                },
-                {
-                    label: 'SMA 50',
-                    data: chartData.sma_50,
-                    borderColor: '#f59e0b',
-                    borderWidth: 1.5,
-                    borderDash: [5, 5],
-                    fill: false,
-                    tension: 0.1,
-                    pointRadius: 0
-                }
-            ]
+            datasets: datasets
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: { labels: { color: '#e0e7ff', font: { size: 11 } } },
-                tooltip: { mode: 'index', intersect: false }
+                legend: { position: 'top', labels: { color: '#e2e8f0', font: { family: 'Heebo' } } },
+                tooltip: {
+                    callbacks: {
+                        label: function (context) {
+                            if (currentChartType === 'candle' && context.datasetIndex === 0) {
+                                const c = chartData.candles[context.dataIndex];
+                                return [
+                                    `פתיחה: $${c.o.toFixed(2)}`,
+                                    `גבוה: $${c.h.toFixed(2)}`,
+                                    `נמוך: $${c.l.toFixed(2)}`,
+                                    `סגירה: $${c.c.toFixed(2)}`
+                                ];
+                            }
+                            return `${context.dataset.label}: $${context.raw.constructor === Array ? context.raw[1].toFixed(2) : context.raw.toFixed(2)}`;
+                        }
+                    }
+                }
             },
             scales: {
-                y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255, 255, 255, 0.05)' } },
-                x: { ticks: { color: '#94a3b8', maxRotation: 45, autoSkip: true, maxTicksLimit: 12 }, grid: { display: false } }
-            }
+                x: { ticks: { color: '#94a3b8', maxRotation: 45, autoSkip: true, maxTicksLimit: 12 }, grid: { display: false } },
+                y: {
+                    ticks: { color: '#94a3b8', callback: (v) => `$${v}` },
+                    grid: { color: 'rgba(255, 255, 255, 0.05)' }
+                }
+            },
+            animation: { duration: 500 }
         }
     });
 }

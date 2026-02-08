@@ -162,6 +162,10 @@ class TechnicalAnalyzer:
             df['r1'] = 2 * df['pivot'] - df['low']
             df['s1'] = 2 * df['pivot'] - df['high']
             
+            # רמות "קיר" (התנגדות) ו"רצפה" (תמיכה) חזקות
+            df['resistance_level'] = df['high'].rolling(window=20).max()
+            df['support_level'] = df['low'].rolling(window=20).min()
+            
         except Exception as e:
             print(f"Error calculating indicators: {e}")
             
@@ -234,60 +238,92 @@ class RecommendationEngine:
         }
 
     def _generate_detailed_analysis(self, symbol, df, technical, risk, fundamental, overview):
-        trend_he = {
-            "Strong Uptrend": "מגמת עלייה חזקה מאוד",
-            "Uptrend": "מגמת עלייה",
-            "Downtrend": "מגמת ירידה",
-            "Strong Downtrend": "מגמת ירידה חזקה",
-            "Neutral": "דשדוש (ללא כיוון ברור)",
-            "Unknown": "לא ידוע"
-        }.get(technical.get('trend'), "נייטרלית")
+        current_price = df['close'].iloc[-1]
+        res_level = df['resistance_level'].iloc[-1] if 'resistance_level' in df.columns else None
+        sup_level = df['support_level'].iloc[-1] if 'support_level' in df.columns else None
         
-        momentum = technical.get('momentum', 'N/A')
-        momentum_he = "חיובי" if momentum == "Overbought" else "שלילי" if momentum == "Oversold" else "נייטרלי"
+        trend = technical.get('trend', 'Neutral')
+        momentum = technical.get('momentum', 'Neutral')
         
-        # בניית רשימת יתרונות וחסרונות (PROS & CONS)
+        # תרגום מצב המניה לשפה פשוטה
+        trend_desc = {
+            "Strong Uptrend": "נמצאת בשיא של עוצמה, עם נטייה ברורה למעלה. הקונים שולטים בשוק.",
+            "Uptrend": "בכיוון חיובי, המחיר מטפס בהדרגה אך בעקביות.",
+            "Downtrend": "מראה סימני חולשה, הכיוון הכללי הוא כלפי מטה.",
+            "Strong Downtrend": "נמצאת בנפילה חופשית יחסית, המוכרים לוחצים על המחיר.",
+            "Neutral": "נעה הצידה ללא כיוון ברור, מחכה לחדשות או אירוע משמעותי."
+        }.get(trend, "במצב יציב יחסית.")
+
+        # הסבר על רמות תמיכה והתנגדות (פשוט)
+        support_he = ""
+        if sup_level:
+            dist_sup = ((current_price / sup_level) - 1) * 100
+            support_he = f"**רצפת המחיר (תמיכה):** הרמה שממנה המחיר נוטה 'לקפוץ' חזרה למעלה נמצאת ב-{sup_level:,.2f}$. המרחק מהרצפה הוא כ-{dist_sup:.1f}%. "
+            if dist_sup < 3:
+                support_he += "אנחנו קרובים מאוד לרצפה, מה שמהווה לעיתים נקודת כניסה בטוחה יותר."
+            else:
+                support_he += "המחיר כרגע מבוסס מעל הרצפה, מה שמעיד על ביטחון מסוים."
+
+        resistance_he = ""
+        if res_level:
+            dist_res = ((res_level / current_price) - 1) * 100
+            resistance_he = f"**תקרת המחיר (התנגדות):** המחיר מתקשה לפרוץ את רמת ה-{res_level:,.2f}$. המרחק מהתקרה הוא כ-{dist_res:.1f}%. "
+            if dist_res < 3:
+                resistance_he += "המניה 'נוגחת' בתקרה כרגע. פריצה של הרמה הזו עשויה להוביל לזינוק חזק קדימה."
+            else:
+                resistance_he += "יש למניה עוד 'מקום לעלות' עד שתפגוש שוב את התקרה הקרובה."
+
+        # בניית דעת אנליסטים ותחזית מעמיקה
+        forecast = ""
+        if trend in ["Strong Uptrend", "Uptrend"] and momentum != "Overbought":
+            forecast = "התחזית לטווח הקרוב היא **חיובית מאוד**. השילוב של מגמה עולה ללא מצב של 'קניית יתר' מעיד על כך שיש עוד דלק לעליות. אם המחיר יפרוץ את התקרה (התנגדות), נראה כנראה שיאים חדשים."
+        elif trend in ["Strong Downtrend", "Downtrend"] and momentum == "Oversold":
+            forecast = "אנחנו נמצאים במצב מעניין - המניה נופלת, אבל היא כבר 'נמכרה מדי' (Oversold). זהו מצב שלרוב מוביל לקפיצה טכנית כלפי מעלה בימים הקרובים. זהירות נדרשת, אך ייתכן שיש כאן הזדמנות לסיבוב קצר."
+        elif momentum == "Overbought":
+            forecast = "המניה כבר עלתה הרבה ומהר מאוד, והיא נמצאת כרגע ב'קניית יתר'. בדרך כלל, במצב כזה מגיע תיקון קל למטה או תקופה של יציבות לפני המשך עליות. מומלץ לא לרדוף אחרי המחיר בשיא."
+        else:
+            forecast = "כרגע השוק מחפש כיוון. המלצת המערכת היא להמתין לפריצה של תקרת המחיר או הגעה לרצפה כדי לקבל החלטה מושכלת יותר."
+
+        # Pros and Cons Logic
         pros = []
         cons = []
+        if trend in ["Strong Uptrend", "Uptrend"]: pros.append("מגמה חיובית ומומנטום חזק.")
+        if fundamental.get('score', 0) > 0: pros.append("נתונים כלכליים טובים - החברה נחשבת לרווחית ויציבה.")
+        if momentum == "Oversold": pros.append("המניה זולה מדי טכנית ('נמכרה מדי'), פוטנציאל לקפיצה.")
         
-        # איסוף נקודות חוזק
-        if technical.get('trend') in ["Strong Uptrend", "Uptrend"]:
-            pros.append("המחיר נמצא במגמת עלייה ונתמך על ידי ממוצעים נעים.")
-        if fundamental.get('score', 0) > 1:
-            pros.append(f"מכפיל הרווח ({overview.get('pe_ratio', 'N/A')}) נחשב לאטרקטיבי יחסית לממוצע.")
-        if overview.get('dividend_yield', 0) and overview.get('dividend_yield') != 'N/A' and float(overview.get('dividend_yield')) > 0.02:
-            pros.append(f"סביבת דיבידנד יציבה ({float(overview.get('dividend_yield'))*100:.1f}%).")
-            
-        # איסוף נקודות אזהרה
-        if technical.get('momentum') == "Overbought":
-            cons.append("המניה במצב 'קניית יתר' (Overbought), ייתכן תיקון טכני בקרוב.")
-        if risk.get('level') == "High":
-            cons.append(f"תנודתיות גבוהה ({risk.get('volatility')}), מה שמעלה את רמת הסיכון למשקיעים זהירים.")
-        if fundamental.get('score', 0) < 0:
-            cons.append("הערכת השווי נראית גבוהה מדי ביחס לרווחים הנוכחיים.")
+        if trend in ["Strong Downtrend", "Downtrend"]: cons.append("מגמת ירידה חזקה - הכסף יוצא מהמניה.")
+        if momentum == "Overbought": cons.append("קניית יתר - המחיר גבוה מדי לנקודת זמן זו, סיכון לתיקון מטה.")
+        if risk.get('level') == "High": cons.append("תנודתיות גבוהה - המניה עלולה 'להשתולל' ולהפיל סטופ-לוסים.")
 
         analysis = [
-            f"### 📊 ניתוח מקצועי עבור {symbol}",
-            f"המניה נסחרת ב**{trend_he}**. האינדיקטורים הטכניים מראים שהמומנטום כרגע הוא **{momentum_he}**.",
+            f"### 🎯 ניתוח מומחה ותחזית עבור {symbol}",
+            f"**איך המניה מתנהגת?** {trend_desc}",
             "",
-            "#### ✅ נקודות חוזק (Pros):",
-            "\n".join([f"* {p}" for p in pros]) if pros else "* לא נמצאו יתרונות בולטים בטווח המיידי.",
+            "#### 📊 מה הגרף מספר לנו?",
+            support_he,
             "",
-            "#### ⚠️ נקודות תורפה (Cons):",
-            "\n".join([f"* {c}" for c in cons]) if cons else "* לא נמצאו נורות אזהרה קריטיות.",
+            resistance_he,
             "",
-            "#### 💡 דעת אנליסטים ותחזית:",
-            f"בהתבסס על הנתונים, רמת הסיכון היא **{risk.get('level')}**. ",
+            "#### 🔮 תחזית ודעת אנליסטים:",
+            forecast,
+            "",
+            "#### ✅ למה כן? (Pros):",
+            "\n".join([f"* {p}" for p in pros]) if pros else "* אין נקודות חוזק בולטות כרגע.",
+            "",
+            "#### ⚠️ למה לא? (Cons):",
+            "\n".join([f"* {c}" for c in cons]) if cons else "* אין נורות אזהרה בולטות כרגע.",
+            "",
+            f"**לסיכום:** המניה נמצאת במצב של **{trend_he_map(trend)}**. המלצתנו המקצועית: **{rec_map(symbol, technical, fundamental)}**."
         ]
         
-        if fundamental.get('score', 0) > 0:
-            analysis.append("אלמנטים פונדמנטליים מצביעים על חברה יציבה עם פוטנציאל ארוך טווח.")
-        elif fundamental.get('score', 0) < 0:
-            analysis.append("מומלץ לנהוג בזהירות יתרה בשל תמחור יתר או חולשה בנתונים הכספיים.")
-            
-        analysis.append(f"\n**לסיכום:** המלצתנו היא **{rec_map(symbol, technical, fundamental)}**.")
-        
         return "\n".join(analysis)
+
+def trend_he_map(trend):
+    return {
+        "Strong Uptrend": "עוצמה שורית", "Uptrend": "מגמה חיובית",
+        "Downtrend": "מגמה שלילית", "Strong Downtrend": "לחץ מכירות כבד",
+        "Neutral": "חיפוש כיוון"
+    }.get(trend, "נייטרלי")
 
 def rec_map(symbol, technical, fundamental):
     # Helper for summarizing strategy in text
@@ -398,12 +434,23 @@ class StockAnalysisSystem:
     def _prepare_chart_data(self, df):
         if df is None or df.empty: return {"dates": [], "prices": [], "sma_20": [], "sma_50": []}
         try:
-            # show full data (up to 5 years if fetched)
+            # הכנה של נתונים גם לגרף קווי וגם לגרף נרות
             return {
                 "dates": df.index.strftime('%Y-%m-%d').tolist(),
                 "prices": df['close'].tolist(),
                 "sma_20": [float(x) if not pd.isna(x) else None for x in df['sma_20']] if 'sma_20' in df.columns else [],
-                "sma_50": [float(x) if not pd.isna(x) else None for x in df['sma_50']] if 'sma_50' in df.columns else []
+                "sma_50": [float(x) if not pd.isna(x) else None for x in df['sma_50']] if 'sma_50' in df.columns else [],
+                "resistance": float(df['resistance_level'].iloc[-1]) if 'resistance_level' in df.columns else None,
+                "support": float(df['support_level'].iloc[-1]) if 'support_level' in df.columns else None,
+                "candles": [
+                    {
+                        "t": row.index.strftime('%Y-%m-%d'),
+                        "o": float(row.open),
+                        "h": float(row.high),
+                        "l": float(row.low),
+                        "c": float(row.close)
+                    } for _, row in df.iterrows()
+                ]
             }
         except Exception as e:
             print(f"Error preparing chart data: {e}")

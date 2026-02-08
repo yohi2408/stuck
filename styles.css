@@ -455,6 +455,96 @@ canvas#priceChart {
     height: 100% !important;
 }
 
+/* Chart Controls Styling */
+.chart-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.chart-range-selector,
+.chart-type-selector {
+    display: flex;
+    gap: 0.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 4px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.range-btn,
+.type-btn {
+    padding: 0.5rem 1rem;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: inherit;
+    font-size: 0.85rem;
+}
+
+.range-btn:hover,
+.type-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+}
+
+.range-btn.active,
+.type-btn.active {
+    background: var(--primary-gradient);
+    color: white;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+/* Candlestick colors */
+.candle-up {
+    color: var(--success);
+}
+
+.candle-down {
+    color: var(--danger);
+}
+
+.detailed-analysis-section {
+    background: var(--bg-card);
+    border-radius: var(--border-radius);
+    padding: 2rem;
+    margin-bottom: 2rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.detailed-analysis-section h3 {
+    font-size: 1.5rem;
+    margin-bottom: 1.5rem;
+    background: var(--primary-gradient);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.detailed-analysis-content {
+    font-size: 1.1rem;
+    line-height: 1.8;
+    color: var(--text-primary);
+}
+
+.detailed-analysis-content strong {
+    color: var(--success);
+}
+
+.detailed-analysis-content h4 {
+    margin: 1.5rem 0 1rem;
+    color: var(--warning);
+    border-right: 4px solid var(--warning);
+    padding-right: 15px;
+}
+
 /* Explanation */
 .explanation-section {
     background: var(--bg-card);
@@ -748,14 +838,37 @@ canvas#priceChart {
 }
 
 .price-up {
-    text-shadow: 0 0 10px rgba(74, 222, 128, 0.5);
-    transition: all 0.3s ease;
+    color: var(--success);
+    animation: pulse-green 1s ease-out;
 }
 
-
 .price-down {
-    text-shadow: 0 0 10px rgba(248, 113, 113, 0.5);
-    transition: all 0.3s ease;
+    color: var(--danger);
+    animation: pulse-red-flash 1s ease-out;
+}
+
+@keyframes pulse-green {
+    0% {
+        background-color: rgba(56, 239, 125, 0.2);
+        text-shadow: 0 0 20px rgba(56, 239, 125, 1);
+    }
+
+    100% {
+        background-color: transparent;
+        text-shadow: 0 0 0 transparent;
+    }
+}
+
+@keyframes pulse-red-flash {
+    0% {
+        background-color: rgba(244, 92, 67, 0.2);
+        text-shadow: 0 0 20px rgba(244, 92, 67, 1);
+    }
+
+    100% {
+        background-color: transparent;
+        text-shadow: 0 0 0 transparent;
+    }
 }
 
 /* Performance Bar */
