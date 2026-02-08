@@ -37,7 +37,7 @@ class StockDataFetcher:
         })
     
     def get_stock_data(self, symbol, outputsize='full'):
-        """קבלת נתוני מחירים יומיים"""
+        """קבלת נתוני מחירים יומיים - גרסת PROD ללא דמו"""
         
         # 1. Try Finnhub
         if self.finnhub_client:
@@ -46,7 +46,8 @@ class StockDataFetcher:
                 if df is not None and not df.empty:
                     print(f"✅ Data from Finnhub for {symbol}")
                     return df
-            except: pass
+            except Exception as e:
+                print(f"Finnhub failed: {e}")
         
         # 2. Try Alpha Vantage
         try:
@@ -62,15 +63,19 @@ class StockDataFetcher:
                 df = df.sort_index().astype(float)
                 print(f"✅ Data from Alpha Vantage for {symbol}")
                 return df
-        except: pass
+            elif 'Error Message' in data:
+                print(f"❌ Alpha Vantage Error: {data['Error Message']}")
+        except Exception as e:
+            print(f"Alpha Vantage failed: {e}")
 
-        # 3. Try Yahoo Finance
+        # 3. Try Yahoo Finance (Enhanced for Production)
         df = self._get_yfinance_data(symbol)
         if df is not None and not df.empty:
             return df
             
-        # 4. Last Resort - MOCK DATA
-        return self._generate_mock_data(symbol)
+        # 4. Final Fail
+        print(f"⛔ CRITICAL: No real data could be fetched for {symbol} after all attempts.")
+        return None
     
     def _get_finnhub_data(self, symbol):
         """קבלת נתונים מ-Finnhub"""
@@ -100,23 +105,6 @@ class StockDataFetcher:
             return None
     
     def _get_yfinance_data(self, symbol):
-        """גיבוי: שימוש ב-Yahoo Finance"""
-        try:
-            print(f"Trying Yahoo Finance for {symbol}...")
-            # Use Ticker with session to bypass blocks
-            ticker = yf.Ticker(symbol, session=self.session)
-            df = ticker.history(period='2y', auto_adjust=True)
-            
-            if df is not None and not df.empty:
-                print(f"✅ Got real data from Yahoo Finance for {symbol}")
-                df.columns = df.columns.str.lower()
-                # Make sure we have the required columns
-                required_cols = ['open', 'high', 'low', 'close', 'volume']
-                if all(col in df.columns for col in required_cols):
-                    return df[required_cols]
-                else:
-                    # In case columns are slightly different
-                    rename_map = {col: col.lower() for col in df.columns if col.lower() in required_cols}
                     df = df.rename(columns=rename_map)
                     present_cols = [col for col in required_cols if col in df.columns]
                     if len(present_cols) >= 4: # Minimum usable data
