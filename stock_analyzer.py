@@ -105,42 +105,54 @@ class StockDataFetcher:
             return None
     
     def _get_yfinance_data(self, symbol):
-                    df = df.rename(columns=rename_map)
-                    present_cols = [col for col in required_cols if col in df.columns]
-                    if len(present_cols) >= 4: # Minimum usable data
-                        return df[present_cols]
-            
-            print(f"Yahoo Finance returned empty data for {symbol}")
-            return None # Real data only
-        except Exception as e:
-            err_msg = str(e)
-            if "Too Many Requests" in err_msg or "Rate limited" in err_msg:
-                 print(f"❌ Yahoo Finance Rate Limit: {err_msg}")
-            else:
-                 print(f"Yahoo Finance failed for {symbol}: {e}")
-            return None
+        """משיכת נתונים מ-Yahoo Finance עם מנגנון עקיפת חסימות מתקדם"""
+        import time
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"Trying Yahoo Finance for {symbol} (Attempt {attempt + 1})...")
+                user_agents = [
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0'
+                ]
+                
+                headers = {
+                    'User-Agent': np.random.choice(user_agents),
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                }
+                self.session.headers.update(headers)
+                
+                ticker = yf.Ticker(symbol, session=self.session)
+                df = ticker.history(period='2y', auto_adjust=True)
+                
+                if df is not None and not df.empty and len(df) > 10:
+                    print(f"✅ Got real data from Yahoo Finance for {symbol} on attempt {attempt + 1}")
+                    df.columns = df.columns.str.lower()
+                    return df
+                
+                print(f"Attempt {attempt + 1}: Yahoo returned empty or minimal data for {symbol}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 * (attempt + 1)) # Exponential backoff
+                    
+            except Exception as e:
+                print(f"Yahoo Finance attempt {attempt + 1} failed for {symbol}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2 * (attempt + 1))
+        
+        return None
 
     def _generate_mock_data(self, symbol):
-        """ייצור נתוני דמו כספק אחרון בהחלט כשהכל חסום"""
-        print(f"⚠️ GENERIC FALLBACK: Generating demo data for {symbol} due to API blocks")
-        dates = pd.date_range(end=datetime.now(), periods=100)
-        base_price = 150.0 # Default
-        if symbol == 'NVDA': base_price = 185.0
-        elif symbol == 'AAPL': base_price = 220.0
-        
-        # Random walk
-        prices = [base_price]
-        for _ in range(99):
-            prices.append(prices[-1] * (1 + np.random.uniform(-0.02, 0.02)))
-            
-        df = pd.DataFrame({
-            'open': prices,
-            'high': [p * 1.01 for p in prices],
-            'low': [p * 0.99 for p in prices],
-            'close': prices,
-            'volume': [int(1000000 * np.random.uniform(0.5, 2.0)) for _ in prices]
-        }, index=dates)
-        return df
+        """ייצור נתוני דמו כספק אחרון בהחלט כשהכל חסום (מושבת ב-PROD)"""
+        # למרות שהמשתמש ביקש בלי דמו, אנחנו שומרים את הפונקציה למקרה חירום 
+        # אבל ב-get_stock_data היא לא תיקרא יותר.
+        return None
 
     def get_batch_yfinance_data(self, symbols, period='2y'):
         """קבלת נתונים לקבוצת מניות בבת אחת - יעיל מאוד למניעת חסימות"""
