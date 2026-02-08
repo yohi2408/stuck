@@ -3,1087 +3,307 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import json
-import yfinance as yf
 from ta.trend import SMAIndicator, EMAIndicator, MACD
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
-import finnhub
-import xml.etree.ElementTree as ET
 
 class StockDataFetcher:
-    """מחלקה לאיסוף נתוני מניות מ-Finnhub, Alpha Vantage ו-Yahoo Finance"""
+    """מחלקה לאיסוף נתוני מניות מ-finance-query.com API"""
     
     def __init__(self, config_path='config.json'):
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
-        
-        self.api_key = self.config['api_key']
-        self.finnhub_key = self.config['finnhub_key']
-        self.base_url = 'https://www.alphavantage.co/query'
-        
-        # התחברות ל-Finnhub
-        try:
-            self.finnhub_client = finnhub.Client(api_key=self.finnhub_key)
-        except Exception as e:
-            print(f"Failed to initialize Finnhub: {e}")
-            self.finnhub_client = None
-
-        # Session with retries for Yahoo Finance
+        self.base_url = 'https://finance-query.com/v2'
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+            'User-Agent': 'FinanceQueryPython/1.0',
+            'Accept': 'application/json'
         })
+        print("✅ StockDataFetcher initialized with finance-query.com")
 
-    def get_stock_data(self, symbol, outputsize='full'):
-        """קבלת נתוני מחירים יומיים - גרסת Production משופרת עם Google Finance"""
-        
-        # 1. ניסיון עם Finnhub (אחד המקורות הכי אמינים לנתונים היסטוריים)
-        if self.finnhub_client:
-            try:
-                df = self._get_finnhub_data(symbol)
-                if df is not None and not df.empty:
-                    print(f"✅ Data fetched from Finnhub for {symbol}")
-                    # נסה לעדכן את המחיר האחרון מ-Google Finance לדיוק מקסימלי
-                    latest_google = self._get_google_price(symbol)
-                    if latest_google:
-                        df.iloc[-1, df.columns.get_loc('close')] = latest_google
-                        print(f"📍 Updated latest price from Google Finance: ${latest_google}")
-                    return df
-            except Exception as e:
-                print(f"Finnhub historical fetch failed for {symbol}: {e}")
-
-        # 2. ניסיון עם Yahoo Finance (משופר עם ניסיונות חוזרים)
-        df = self._get_yfinance_data(symbol)
-        if df is not None and not df.empty:
-            print(f"✅ Data fetched from Yahoo Finance for {symbol}")
-            # נסה לעדכן את המחיר האחרון מ-Google Finance
-            latest_google = self._get_google_price(symbol)
-            if latest_google:
-                df.iloc[-1, df.columns.get_loc('close')] = latest_google
-            return df
-
-        # 3. מוצא אחרון: Google Finance (Scraping)
-        # אם כל השאר נכשל, ננסה להביא לפחות את המחיר הנוכחי מגוגל
-        google_price = self._get_google_price(symbol)
-        if google_price:
-            print(f"🚀 Success: Fetched real-time price from Google Finance for {symbol}")
-            # יצירת DataFrame בסיסי כדי שהמערכת תוכל להציג את המחיר
-            dates = [datetime.now()]
-            df = pd.DataFrame({
-                'open': [google_price], 'high': [google_price], 
-                'low': [google_price], 'close': [google_price], 'volume': [0]
-            }, index=dates)
-            return df
-
-        print(f"❌ ERROR: All real data sources failed for {symbol}.")
-        return None
-
-    def _get_finnhub_data(self, symbol):
-        """משיכת נתוני נרות מ-Finnhub"""
+    def _get(self, endpoint, params=None):
+        """פונקציית עזר לביצוע בקשות GET"""
+        url = f"{self.base_url}/{endpoint}"
         try:
-            end = int(datetime.now().timestamp())
-            start = int((datetime.now() - timedelta(days=730)).timestamp())
-            res = self.finnhub_client.stock_candles(symbol, 'D', start, end)
-            if res.get('s') == 'ok':
-                df = pd.DataFrame({
-                    'open': res['o'], 'high': res['h'], 'low': res['l'], 
-                    'close': res['c'], 'volume': res['v']
-                }, index=pd.to_datetime(res['t'], unit='s'))
-                return df
-        except Exception as e:
-            print(f"Finnhub internal error: {e}")
-        return None
-
-    def _get_yfinance_data(self, symbol):
-        """משיכת נתונים מ-Yahoo Finance עם עקיפת חסימות"""
-        import time
-        for attempt in range(3):
-            try:
-                ua = [
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-                ]
-                self.session.headers.update({'User-Agent': np.random.choice(ua)})
-                ticker = yf.Ticker(symbol, session=self.session)
-                df = ticker.history(period='2y', auto_adjust=True)
-                if not df.empty and len(df) > 10:
-                    df.columns = df.columns.str.lower()
-                    return df
-                time.sleep(1)
-            except:
-                time.sleep(1)
-        return None
-
-    def _get_google_price(self, symbol):
-        """משיכת מחיר בזמן אמת מ-Google Finance (Scraping)"""
-        try:
-            from bs4 import BeautifulSoup
-            # נסה סיומות שונות עבור בורסות ארה"ב
-            for market in ['NASDAQ', 'NYSE', 'CURRENCY']:
-                url = f"https://www.google.com/finance/quote/{symbol}:{market}"
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'}
-                r = requests.get(url, headers=headers, timeout=10)
-                
-                if r.status_code == 200:
-                    soup = BeautifulSoup(r.text, 'html.parser')
-                    # מחפש את הקלאס שהוזכר בכתבה או סלקטורים נפוצים אחרים
-                    selectors = [
-                        ('div', {'class': 'YMlKec fxKbKc'}), # המחיר הראשי
-                        ('div', {'class': 'YMlKec'}),
-                        ('span', {'class': 'IsqQVc'})
-                    ]
-                    
-                    for tag, attrs in selectors:
-                        elem = soup.find(tag, attrs)
-                        if elem:
-                            price_text = elem.text.replace('$', '').replace(',', '').strip()
-                            if price_text:
-                                return float(price_text)
-            
-            # אם לא מצאנו עבור ארה"ב, ננסה בלי ציון בורסה
-            url = f"https://www.google.com/finance/quote/{symbol}"
-            r = requests.get(url, headers=headers, timeout=10)
+            r = self.session.get(url, params=params, timeout=15)
             if r.status_code == 200:
-                soup = BeautifulSoup(r.text, 'html.parser')
-                elem = soup.find('div', {'class': 'YMlKec fxKbKc'})
-                if elem:
-                    return float(elem.text.replace('$', '').replace(',', '').strip())
+                return r.json()
+            else:
+                print(f"❌ API Error ({r.status_code}) for {endpoint}: {r.text}")
         except Exception as e:
-            print(f"Google Finance scrape failed for {symbol}: {e}")
+            print(f"❌ Connection Error for {endpoint}: {e}")
         return None
 
-    def _generate_mock_data(self, symbol):
-        """פונקציה זו הושבתה בגרסת ה-Production"""
+    def get_stock_data(self, symbol, range='2y', interval='1d'):
+        """קבלת נתוני מחירים היסטוריים (Candles)"""
+        print(f"Fetching chart for {symbol}...")
+        res = self._get(f"chart/{symbol}", params={'range': range, 'interval': interval})
+        
+        if res and 'candles' in res:
+            df = pd.DataFrame(res['candles'])
+            if not df.empty:
+                # המרה של timestamp (שניות) לתאריך
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+                df.set_index('timestamp', inplace=True)
+                # הבטחת שמות עמודות תואמים למנתח הטכני
+                df = df[['open', 'high', 'low', 'close', 'volume']]
+                print(f"✅ Chart fetched from finance-query for {symbol}")
+                return df
+                
+        print(f"❌ Failed to fetch chart for {symbol}")
         return None
-
-    def get_batch_yfinance_data(self, symbols, period='2y'):
-        """קבלת נתונים לקבוצת מניות בבת אחת"""
-        try:
-            return yf.download(symbols, period=period, interval='1d', group_by='ticker', session=self.session)
-        except: return None
 
     def get_company_overview(self, symbol):
-        """קבלת מידע פונדמנטלי"""
-        # Try Finnhub first (Company Profile 2)
-        if self.finnhub_client:
-            try:
-                profile = self.finnhub_client.company_profile2(symbol=symbol)
-                if profile:
-                    return {
-                        'Name': profile.get('name', symbol),
-                        'Industry': profile.get('finnhubIndustry', 'N/A'),
-                        'MarketCapitalization': profile.get('marketCapitalization', 'N/A'),
-                        'Beta': 'N/A' # Finnhub returns this in basic financials
-                    }
-            except: pass
-        
-        # Backup: Alpha Vantage
-        try:
-            params = {'function': 'OVERVIEW', 'symbol': symbol, 'apikey': self.api_key}
-            r = requests.get(self.base_url, params=params, timeout=5)
-            return r.json()
-        except: return {'Name': symbol}
+        """קבלת מידע פונדמנטלי (Quote Data)"""
+        print(f"Fetching info for {symbol}...")
+        res = self._get(f"quote/{symbol}") # /quote/ usually has summary info in finance-query
+        if res:
+            # המרה למבנה ש-StockAnalyzer מצפה לו (מתואם לשדות של finance-query/Yahoo)
+            return {
+                'Name': res.get('longName', res.get('shortName', symbol)),
+                'Symbol': symbol,
+                'Description': res.get('longBusinessSummary', 'N/A'),
+                'Sector': res.get('sector', 'N/A'),
+                'Industry': res.get('industry', 'N/A'),
+                'MarketCapitalization': res.get('marketCap', 'N/A'),
+                'PERatio': res.get('trailingPE', 'N/A'),
+                'Beta': res.get('beta', 'N/A'),
+                'DividendYield': res.get('dividendYield', 'N/A'),
+                'ProfitMargin': res.get('profitMargins', 'N/A'),
+                'FiftyTwoWeekHigh': res.get('fiftyTwoWeekHigh', 'N/A'),
+                'FiftyTwoWeekLow': res.get('fiftyTwoWeekLow', 'N/A')
+            }
+        return {'Name': symbol, 'Symbol': symbol}
 
     def get_stock_news(self, symbol):
-        # Try Google News RSS first as it allows specific query "SYMBOL stock"
-        # which yields more relevant results than generic Yahoo ticker news
-        google_news = self._fetch_google_news_rss(symbol)
-        if google_news:
-            return google_news
-
-        try:
-            print(f"Google RSS empty, falling back to Yahoo Finance for {symbol}...")
-            ticker = yf.Ticker(symbol)
-            news = ticker.news
-            
-            # Debug print
-            print(f"DEBUG: Yahoo News raw data for {symbol}: {len(news) if news else 'None'}")
-            
-            formatted_news = []
-            if news and len(news) > 0:
-                for item in news[:5]: # Take top 5
-                    try:
-                        # Handle struct: item can be the story itself or nested under 'content'
-                        story = item.get('content', item)
-                        
-                        # Title
-                        title = story.get('title', 'No Title')
-                        
-                        # Date
-                        # Try 'pubDate' (ISO format) or 'providerPublishTime' (timestamp)
-                        pub_date_str = story.get('pubDate')
-                        if pub_date_str:
-                            try:
-                                dt = datetime.strptime(pub_date_str, "%Y-%m-%dT%H:%M:%SZ")
-                                published = dt
-                            except:
-                                published = datetime.now()
-                        else:
-                            ts = story.get('providerPublishTime', 0)
-                            published = datetime.fromtimestamp(ts)
-
-                        # Link
-                        # Try clickThroughUrl -> url, or canonicalUrl -> url
-                        link = '#'
-                        if 'clickThroughUrl' in story and story['clickThroughUrl']:
-                            link = story['clickThroughUrl'].get('url', '#')
-                        elif 'canonicalUrl' in story and story['canonicalUrl']:
-                            link = story['canonicalUrl'].get('url', '#')
-                        elif 'link' in story:
-                            link = story['link']
-                        
-                        # Publisher
-                        publisher = 'Yahoo Finance'
-                        if 'provider' in story and story['provider']:
-                             publisher = story['provider'].get('displayName', 'Yahoo Finance')
-
-                        formatted_news.append({
-                            'title': title,
-                            'publisher': publisher,
-                            'link': link,
-                            'published': published.strftime('%Y-%m-%d %H:%M'),
-                            'type': 'STORY'
-                        })
-                    except Exception as e:
-                        print(f"Error parsing news item: {e}")
-                        continue
+        """קבלת חדשות אחרונות"""
+        print(f"Fetching news for {symbol}...")
+        res = self._get(f"news/{symbol}")
+        formatted_news = []
+        
+        if res and isinstance(res, list):
+            for item in res[:5]: # 5 כתבות ראשונות
+                story = item.get('content', item)
+                title = story.get('title', 'No Title')
                 
-                if formatted_news:
-                    return formatted_news
-            
-            return []
-            
-        except Exception as e:
-            print(f"Error fetching news for {symbol}: {e}")
-            return []
+                # תאריך (יכול להיות ISO או Timestamp)
+                published_at = story.get('pubDate', story.get('providerPublishTime', ''))
+                if isinstance(published_at, int):
+                    published_at = datetime.fromtimestamp(published_at).strftime('%Y-%m-%d %H:%M')
+                
+                formatted_news.append({
+                    'title': title,
+                    'publisher': story.get('provider', {}).get('displayName', 'Market News'),
+                    'link': story.get('clickThroughUrl', {}).get('url', story.get('link', '#')),
+                    'published': published_at,
+                    'type': 'STORY'
+                })
+        return formatted_news
 
-    def _fetch_google_news_rss(self, symbol):
-        """גיבוי: משיכת חדשות מ-Google News RSS"""
-        try:
-            print(f"Fetching backup news from Google RSS for {symbol}...")
-            url = f"https://news.google.com/rss/search?q={symbol}+stock&hl=en-US&gl=US&ceid=US:en"
-            response = requests.get(url, timeout=5)
-            if response.status_code == 200:
-                root = ET.fromstring(response.content)
-                news_items = []
-                for item in root.findall('.//item')[:5]:
-                    try:
-                        title = item.find('title').text if item.find('title') is not None else 'No Title'
-                        link = item.find('link').text if item.find('link') is not None else '#'
-                        pubDate = item.find('pubDate').text if item.find('pubDate') is not None else datetime.now().strftime('%a, %d %b %Y %H:%M:%S GMT')
-                        
-                        # Handle source
-                        source_elem = item.find('source')
-                        if source_elem is not None:
-                            source = source_elem.text or source_elem.get('url') or 'Google News'
-                        else:
-                            source = 'Google News'
-                        
-                        # המרת תאריך
-                        try:
-                            # Try multiple formats
-                            try:
-                                dt = datetime.strptime(pubDate, '%a, %d %b %Y %H:%M:%S %Z')
-                            except:
-                                dt = datetime.strptime(pubDate, '%a, %d %b %Y %H:%M:%S GMT')
-                            pub_fmt = dt.strftime('%Y-%m-%d %H:%M')
-                        except:
-                            pub_fmt = pubDate
-                            
-                        news_items.append({
-                            'title': title,
-                            'publisher': source,
-                            'link': link,
-                            'published': pub_fmt,
-                            'type': 'STORY'
-                        })
-                    except Exception as e:
-                        print(f"Error parsing RSS item: {e}")
-                        continue
-                        
-                return news_items
-        except Exception as e:
-            print(f"Google RSS failed: {e}")
+    def get_batch_quotes(self, symbols):
+        """קבלת מחירים בזמן אמת עבור קבוצת מניות (מעולה לסריקת שוק)"""
+        if isinstance(symbols, list):
+            symbols_str = ",".join(symbols)
+        else:
+            symbols_str = symbols
+            
+        res = self._get(f"quote/{symbols_str}")
+        if res:
+            # אם זה סמל יחיד, המערכת מחזירה אובייקט, אם כמה - רשימה
+            if isinstance(res, dict):
+                return [res]
+            return res
         return []
 
+    def get_market_summary(self):
+        """סיכום מצב השוק העולמי"""
+        return self._get("market")
 
     
 class TechnicalAnalyzer:
-    """מחלקה לניתוח טכני של מניות"""
-    
-    def __init__(self, config_path='config.json'):
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
-        self.params = self.config['analysis_parameters']
+    """ניתוח טכני בסיסי"""
     
     def calculate_indicators(self, df):
         """חישוב אינדיקטורים טכניים"""
-        if df is None or len(df) < 50:
-            return None
-        
-        indicators = {}
-        
-        # Moving Averages
-        sma_short = SMAIndicator(close=df['close'], window=self.params['sma_short'])
-        sma_long = SMAIndicator(close=df['close'], window=self.params['sma_long'])
-        indicators['sma_20'] = sma_short.sma_indicator()
-        indicators['sma_50'] = sma_long.sma_indicator()
-        
-        # EMA
-        ema_12 = EMAIndicator(close=df['close'], window=12)
-        indicators['ema_12'] = ema_12.ema_indicator()
-        
-        # RSI
-        rsi = RSIIndicator(close=df['close'], window=self.params['rsi_period'])
-        indicators['rsi'] = rsi.rsi()
-        
-        # MACD
-        macd = MACD(close=df['close'], 
-                    window_fast=self.params['macd_fast'],
-                    window_slow=self.params['macd_slow'],
-                    window_sign=self.params['macd_signal'])
-        indicators['macd'] = macd.macd()
-        indicators['macd_signal'] = macd.macd_signal()
-        indicators['macd_diff'] = macd.macd_diff()
-        
-        # Bollinger Bands
-        bollinger = BollingerBands(close=df['close'], window=20, window_dev=2)
-        indicators['bb_upper'] = bollinger.bollinger_hband()
-        indicators['bb_middle'] = bollinger.bollinger_mavg()
-        indicators['bb_lower'] = bollinger.bollinger_lband()
-        
-        # הוספת האינדיקטורים ל-DataFrame
-        for key, value in indicators.items():
-            df[key] = value
-        
+        if df is None or len(df) < 20:
+            return df
+            
+        try:
+            # ממוצעים נעים
+            df['sma_20'] = df['close'].rolling(window=20).mean()
+            df['sma_50'] = df['close'].rolling(window=50).mean()
+            
+            # RSI
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            df['rsi'] = 100 - (100 / (1 + rs))
+            
+            # MACD (פשוט)
+            exp1 = df['close'].ewm(span=12, adjust=False).mean()
+            exp2 = df['close'].ewm(span=26, adjust=False).mean()
+            df['macd'] = exp1 - exp2
+            df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+            df['macd_diff'] = df['macd'] - df['macd_signal']
+            
+            # רמות תמיכה והתנגדות בסיסיות (פיבוט)
+            df['pivot'] = (df['high'] + df['low'] + df['close']) / 3
+            df['r1'] = 2 * df['pivot'] - df['low']
+            df['s1'] = 2 * df['pivot'] - df['high']
+            
+        except Exception as e:
+            print(f"Error calculating indicators: {e}")
+            
         return df
-    
-    def get_trend_signal(self, df):
-        """זיהוי מגמה - עולה/יורדת/צדדית"""
-        if df is None or len(df) < 50:
-            return "Unknown"
-        
-        latest = df.iloc[-1]
-        
-        # בדיקת מיקום המחיר ביחס לממוצעים נעים
-        if latest['close'] > latest['sma_20'] > latest['sma_50']:
-            return "Strong Uptrend"
-        elif latest['close'] > latest['sma_20']:
-            return "Uptrend"
-        elif latest['close'] < latest['sma_20'] < latest['sma_50']:
-            return "Strong Downtrend"
-        elif latest['close'] < latest['sma_20']:
-            return "Downtrend"
-        else:
-            return "Sideways"
-    
-    def get_momentum_signal(self, df):
-        """בדיקת מומנטום על בסיס RSI ו-MACD"""
-        if df is None or len(df) < 50:
-            return "Unknown"
-        
-        latest = df.iloc[-1]
-        signals = []
-        
-        # RSI
-        if latest['rsi'] < self.params['rsi_oversold']:
-            signals.append("Oversold (RSI)")
-        elif latest['rsi'] > self.params['rsi_overbought']:
-            signals.append("Overbought (RSI)")
-        
-        # MACD
-        if latest['macd_diff'] > 0:
-            signals.append("Bullish (MACD)")
-        else:
-            signals.append("Bearish (MACD)")
-        
-        return ", ".join(signals) if signals else "Neutral"
 
+    def get_trend_signal(self, df):
+        if df is None or len(df) < 50: return "Unknown"
+        last = df.iloc[-1]
+        
+        # Check for NaN and handle
+        try:
+            if pd.isna(last['sma_20']) or pd.isna(last['sma_50']):
+                return "Neutral"
+                
+            if last['close'] > last['sma_20'] > last['sma_50']: return "Strong Uptrend"
+            if last['close'] > last['sma_20']: return "Uptrend"
+            if last['close'] < last['sma_20'] < last['sma_50']: return "Strong Downtrend"
+            if last['close'] < last['sma_20']: return "Downtrend"
+        except: pass
+        return "Neutral"
+
+    def get_momentum_signal(self, df):
+        if df is None or 'rsi' not in df.columns: return "Unknown"
+        rsi = df['rsi'].iloc[-1]
+        if pd.isna(rsi): return "Neutral"
+        if rsi > 70: return "Overbought"
+        if rsi < 30: return "Oversold"
+        return "Neutral"
 
 class FundamentalAnalyzer:
-    """מחלקה לניתוח פונדמנטלי"""
-    
+    """ניתוח פונדמנטלי מהיר"""
     def analyze_fundamentals(self, overview):
-        """ניתוח נתונים פונדמנטליים"""
-        if not overview:
-            return {"score": 0, "analysis": "No data available"}
-        
-        analysis = {}
         score = 0
-        
-        # P/E Ratio
+        pe = overview.get('PERatio')
         try:
-            pe = float(overview.get('PERatio', 0))
-            if 0 < pe < 15:
-                analysis['pe_rating'] = "Undervalued"
-                score += 2
-            elif 15 <= pe < 25:
-                analysis['pe_rating'] = "Fair Value"
-                score += 1
-            elif pe >= 25:
-                analysis['pe_rating'] = "Overvalued"
-            else:
-                analysis['pe_rating'] = "N/A"
-        except:
-            analysis['pe_rating'] = "N/A"
-        
-        # Market Cap
-        try:
-            market_cap = float(overview.get('MarketCapitalization', 0))
-            if market_cap > 200_000_000_000:
-                analysis['size'] = "Mega Cap (Very Safe)"
-                score += 2
-            elif market_cap > 10_000_000_000:
-                analysis['size'] = "Large Cap (Safe)"
-                score += 1
-            elif market_cap > 2_000_000_000:
-                analysis['size'] = "Mid Cap (Moderate Risk)"
-            else:
-                analysis['size'] = "Small Cap (High Risk)"
-                score -= 1
-        except:
-            analysis['size'] = "Unknown"
-        
-        # Dividend Yield
-        try:
-            div_yield = float(overview.get('DividendYield', 0))
-            if div_yield > 0.03:
-                analysis['dividend'] = f"Good Dividend ({div_yield*100:.2f}%)"
-                score += 1
-            else:
-                analysis['dividend'] = "Low/No Dividend"
-        except:
-            analysis['dividend'] = "N/A"
-        
-        analysis['score'] = score
-        return analysis
-
-
-class RiskAssessor:
-    """מחלקה להערכת סיכונים"""
-    
-    def __init__(self, config_path='config.json'):
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
-        self.thresholds = self.config['risk_thresholds']
-    
-    def analyze_investment_strategy(self, df, risk_rec):
-        """ניתוח אסטרטגיית השקעה (DCA vs Lump Sum) עם Backtest ותחזית"""
-        try:
-            if df is None or len(df) < 252:
-                 return {
-                    "strategy": "N/A",
-                    "volatility": 0,
-                    "recommendation_he": "אין מספיק נתונים לחישוב אסטרטגיה (נדרשת שנה לפחות)."
-                }
-
-            # 1. חישוב תנודתיות שנתית
-            daily_returns = df['close'].pct_change().dropna()
-            volatility = daily_returns.std() * np.sqrt(252) * 100
-            
-            # 2. Backtest: השוואה בין הפקדה חד פעמית לבין DCA בשנה האחרונה
-            # נניח השקעה של 12,000 דולר:
-            # Lump Sum: 12,000 בתחילת התקופה (לפני 252 ימי מסחר)
-            # DCA: 1,000 בכל חודש (כל 21 ימי מסחר בערך)
-            
-            # קח את השנה האחרונה (252 ימי מסחר)
-            df_last_year = df.tail(252).copy()
-            start_price = df_last_year['close'].iloc[0]
-            current_price = df_last_year['close'].iloc[-1]
-            
-            # Lump Sum calculation
-            total_investment = 12000
-            shares_lump_sum = total_investment / start_price
-            value_lump_sum = shares_lump_sum * current_price
-            return_lump_sum = ((value_lump_sum - total_investment) / total_investment) * 100
-            
-            # DCA calculation (12 תשלומים של 1000)
-            monthly_investment = 1000
-            shares_dca = 0
-            # נקודות כניסה כל ~21 ימי מסחר
-            for i in range(0, 252, 21):
-                if i < len(df_last_year):
-                    price_at_date = df_last_year['close'].iloc[i]
-                    shares_dca += monthly_investment / price_at_date
-            
-            value_dca = shares_dca * current_price
-            return_dca = ((value_dca - total_investment) / total_investment) * 100
-            
-            # 3. Forecast: תחזית לשנה הבאה
-            # CAGR (Compound Annual Growth Rate) - תשואה שנתית ממוצעת
-            # נחשב על בסיס התשואה הכוללת של השנה האחרונה
-            cagr = ((current_price / start_price) - 1)
-            
-            # טווחי תחזית (בהתבסס על CAGR וסטיית תקן)
-            # אופטימי: CAGR + חצי סטיית תקן
-            # פסימי: CAGR - סטיית תקן
-            # ריאלי: CAGR
-            
-            # המרת תנודתיות לאחוזים עשרוניים
-            vol_decimal = volatility / 100
-            
-            # תחזית רווח על 10,000 דולר בעוד שנה
-            future_investment = 10000
-            
-            forecast_optimistic = future_investment * (1 + cagr + (vol_decimal * 0.5))
-            forecast_realistic = future_investment * (1 + cagr)
-            forecast_pessimistic = future_investment * (1 + cagr - vol_decimal)
-            
-            # 4. המלצה וניסוח
-            strategy = "DCA" if volatility > 25 or return_dca > return_lump_sum else "Lump Sum"
-            
-            recommendation_he = f"📊 **ניתוח היסטורי (שנה אחרונה):**\n"
-            recommendation_he += f"• **הפקדה חד-פעמית (12k)**: הניבה **{return_lump_sum:.1f}%** (שווי כיום: ${value_lump_sum:.0f})\n"
-            recommendation_he += f"• **הוראת קבע (1k/חודש)**: הניבה **{return_dca:.1f}%** (שווי כיום: ${value_dca:.0f})\n\n"
-            
-            if return_lump_sum > return_dca:
-                recommendation_he += f"💡 **מסקנה**: השקעה חד-פעמית ניצחה בשנה החולפת בפער של {(return_lump_sum - return_dca):.1f}%.\n"
-            else:
-                recommendation_he += f"💡 **מסקנה**: פיזור השקעות (DCA) השתלם יותר והקטין סיכונים.\n"
-                
-            recommendation_he += f"\n🔮 **תחזית לשנה הקרובה (עבור 10,000$):**\n"
-            recommendation_he += f"• **תרחיש אופטימי**: ${forecast_optimistic:.0f} (תשואה: {((forecast_optimistic/10000)-1)*100:.1f}%)\n"
-            recommendation_he += f"• **תרחיש ריאלי**: ${forecast_realistic:.0f} (תשואה: {((forecast_realistic/10000)-1)*100:.1f}%)\n"
-            recommendation_he += f"• **תרחיש פסימי**: ${forecast_pessimistic:.0f} (תשואה: {((forecast_pessimistic/10000)-1)*100:.1f}%)\n"
-            
-            if volatility > 30:
-                recommendation_he += "\n⚠️ **הערה**: התנודתיות גבוהה, הטווחים עשויים להיות רחבים יותר."
-
-            return {
-                "strategy": f"{strategy} Recommended",
-                "volatility": round(volatility, 2),
-                "recommendation_he": recommendation_he,
-                "backtest": {
-                    "lump_sum_return": round(return_lump_sum, 2),
-                    "dca_return": round(return_dca, 2),
-                    "winner": "Lump Sum" if return_lump_sum > return_dca else "DCA"
-                },
-                "forecast": {
-                    "optimistic": round(forecast_optimistic, 2),
-                    "realistic": round(forecast_realistic, 2),
-                    "pessimistic": round(forecast_pessimistic, 2)
-                }
-            }
-        except Exception as e:
-            print(f"Error in strategy analysis: {e}")
-            return {
-                "strategy": "N/A",
-                "volatility": 0,
-                "recommendation_he": "לא ניתן לחשב אסטרטגיה בשל שגיאה בנתונים."
-            }
-
-    def assess_risk(self, df, overview):
-        """הערכת רמת סיכון"""
-        if df is None or len(df) < 30:
-            return {"level": "Unknown", "score": 5, "factors": []}
-        
-        risk_score = 0
-        factors = []
-        
-        # Volatility (סטיית תקן של תשואות יומיות)
-        returns = df['close'].pct_change().dropna()
-        volatility = returns.std()
-        
-        if volatility < self.thresholds['low_volatility']:
-            factors.append("Low Volatility (Good)")
-            risk_score -= 1
-        elif volatility > self.thresholds['high_volatility']:
-            factors.append("High Volatility (Risky)")
-            risk_score += 2
-        else:
-            factors.append("Moderate Volatility")
-            risk_score += 1
-        
-        # Beta
-        try:
-            beta = float(overview.get('Beta', 1.0))
-            if beta < self.thresholds['low_beta']:
-                factors.append(f"Low Beta ({beta:.2f}) - Less volatile than market")
-                risk_score -= 1
-            elif beta > self.thresholds['high_beta']:
-                factors.append(f"High Beta ({beta:.2f}) - More volatile than market")
-                risk_score += 1
-            else:
-                factors.append(f"Average Beta ({beta:.2f})")
-        except:
-            factors.append("Beta N/A")
-        
-        # Price trend (ירידה חדה = סיכון)
-        recent_change = (df['close'].iloc[-1] / df['close'].iloc[-30] - 1) * 100
-        if recent_change < -15:
-            factors.append(f"Sharp Decline ({recent_change:.1f}% in 30 days)")
-            risk_score += 2
-        elif recent_change > 15:
-            factors.append(f"Sharp Rise ({recent_change:.1f}% in 30 days)")
-            risk_score += 1
-        
-        # קביעת רמת סיכון
-        if risk_score <= 0:
-            level = "Low Risk"
-        elif risk_score <= 2:
-            level = "Moderate Risk"
-        else:
-            level = "High Risk"
+            pe_val = float(pe) if pe and pe != 'N/A' else None
+            if pe_val:
+                if pe_val < 15: score += 2
+                elif pe_val < 25: score += 1
+                elif pe_val > 50: score -= 1
+        except: pass
         
         return {
-            "level": level,
-            "score": risk_score,
-            "factors": factors,
-            "volatility": f"{volatility*100:.2f}%"
+            "score": score,
+            "pe_rating": "Good" if score > 0 else "Fair",
+            "market_cap": overview.get('MarketCapitalization', 'N/A')
         }
-
-
-
 
 class RecommendationEngine:
-    """מנוע המלצות משולב"""
-    
-    def __init__(self, config_path='config.json'):
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
-    
-    def generate_recommendation(self, symbol, df, overview, technical_signals, risk_assessment, fundamental_analysis):
-        """יצירת המלצה מקיפה"""
+    """מנוע המלצות חכם"""
+    def generate_recommendation(self, symbol, df, overview, technical, risk, fundamental):
+        # Trend score based on signal
+        trend_map = {"Strong Uptrend": 2, "Uptrend": 1, "Downtrend": -1, "Strong Downtrend": -2, "Neutral": 0, "Unknown": 0}
+        trend_score = trend_map.get(technical.get('trend'), 0)
         
-        recommendation = {
+        total_score = trend_score + fundamental.get('score', 0)
+        
+        rec = "Hold"
+        if total_score >= 3: rec = "Strong Buy"
+        elif total_score >= 1: rec = "Buy"
+        elif total_score <= -2: rec = "Strong Sell"
+        elif total_score <= -1: rec = "Sell"
+        
+        return {
             "symbol": symbol,
-            "company_name": overview.get('Name', symbol),
-            "current_price": float(df['close'].iloc[-1]) if df is not None else 0,
-            "timestamp": datetime.now().isoformat()
+            "short_term": rec,
+            "long_term": "Buy & Hold" if fundamental.get('score', 0) > 0 else "Hold",
+            "short_term_confidence": "High" if abs(total_score) >= 2 else "Medium",
+            "signal_strength": total_score
         }
-        
-        # ניקוד כולל
-        total_score = 0
-        
-        # ניתוח טכני (40%)
-        if technical_signals.get('trend') in ['Strong Uptrend', 'Uptrend']:
-            total_score += 2
-        elif technical_signals.get('trend') in ['Strong Downtrend', 'Downtrend']:
-            total_score -= 2
-        
-        if 'Oversold' in technical_signals.get('momentum', ''):
-            total_score += 1  # הזדמנות קנייה
-        elif 'Overbought' in technical_signals.get('momentum', ''):
-            total_score -= 1
-        
-        # ניתוח פונדמנטלי (30%)
-        total_score += fundamental_analysis.get('score', 0) * 0.75
-        
-        # סיכון (30%)
-        risk_score = risk_assessment.get('score', 3)
-        total_score -= risk_score * 0.5
-        
-        # המלצה לטווח קצר (1-3 חודשים)
-        if total_score >= 3:
-            recommendation['short_term'] = "Strong Buy"
-            recommendation['short_term_confidence'] = "High"
-        elif total_score >= 1.5:
-            recommendation['short_term'] = "Buy"
-            recommendation['short_term_confidence'] = "Medium"
-        elif total_score >= 0:
-            recommendation['short_term'] = "Hold"
-            recommendation['short_term_confidence'] = "Medium"
-        elif total_score >= -1.5:
-            recommendation['short_term'] = "Sell"
-            recommendation['short_term_confidence'] = "Medium"
-        else:
-            recommendation['short_term'] = "Strong Sell"
-            recommendation['short_term_confidence'] = "High"
-        
-        # המלצה לטווח ארוך (6-12 חודשים) - דגש על פונדמנטלים
-        long_term_score = fundamental_analysis.get('score', 0) * 1.5 - risk_score * 0.3
-        
-        if long_term_score >= 2:
-            recommendation['long_term'] = "Strong Buy & Hold"
-        elif long_term_score >= 1:
-            recommendation['long_term'] = "Buy & Hold"
-        elif long_term_score >= -1:
-            recommendation['long_term'] = "Hold"
-        else:
-            recommendation['long_term'] = "Avoid"
-        
-        # סיכום
-        recommendation['risk_level'] = risk_assessment.get('level', 'Unknown')
-        recommendation['total_score'] = round(total_score, 2)
-        recommendation['technical_trend'] = technical_signals.get('trend', 'Unknown')
-        recommendation['fundamental_rating'] = fundamental_analysis.get('pe_rating', 'N/A')
-        
-        # הסבר
-        explanation = []
-        explanation.append(f"Trend: {technical_signals.get('trend', 'Unknown')}")
-        explanation.append(f"Momentum: {technical_signals.get('momentum', 'Unknown')}")
-        explanation.append(f"Risk: {risk_assessment.get('level', 'Unknown')}")
-        explanation.append(f"Valuation: {fundamental_analysis.get('pe_rating', 'N/A')}")
-        
-        recommendation['explanation'] = " | ".join(explanation)
-        
-        # הוספת ניתוח מפורט בעברית
-        recommendation['detailed_analysis_he'] = self._generate_detailed_analysis(
-            symbol, df, technical_signals, risk_assessment, fundamental_analysis
-        )
-        
-        return recommendation
-    
-    def _generate_detailed_analysis(self, symbol, df, technical_signals, risk_assessment, fundamental_analysis):
-        """יצירת ניתוח מפורט בעברית עם תחזית וניתוח טכני מתקדם"""
-        if df is None or len(df) < 30:
-            return "אין מספיק נתונים לניתוח מפורט"
-        
-        analysis_parts = []
-        
-        # כותרת
-        analysis_parts.append(f"📊 ניתוח מעמיק של {symbol}")
-        analysis_parts.append("")
-        
-        # נתונים בסיסיים
-        latest_price = df['close'].iloc[-1]
-        sma_20 = df['sma_20'].iloc[-1] if 'sma_20' in df.columns else None
-        sma_50 = df['sma_50'].iloc[-1] if 'sma_50' in df.columns else None
-        high_52w = df['high'].tail(252).max() if len(df) >= 252 else df['high'].max()
-        low_52w = df['low'].tail(252).min() if len(df) >= 252 else df['low'].min()
-        
-        # חישוב תמיכה והתנגדות
-        recent_highs = df['high'].tail(30).nlargest(5).mean()
-        recent_lows = df['low'].tail(30).nsmallest(5).mean()
-        resistance_1 = recent_highs
-        support_1 = recent_lows
-        resistance_2 = high_52w
-        support_2 = low_52w
-        
-        # חישוב רמות פיבונאצ'י
-        price_range = high_52w - low_52w
-        fib_236 = low_52w + (price_range * 0.236)
-        fib_382 = low_52w + (price_range * 0.382)
-        fib_500 = low_52w + (price_range * 0.500)
-        fib_618 = low_52w + (price_range * 0.618)
-        
-        # ניתוח נפח
-        avg_volume = df['volume'].tail(30).mean()
-        recent_volume = df['volume'].tail(5).mean()
-        volume_trend = "עולה" if recent_volume > avg_volume * 1.2 else "יורד" if recent_volume < avg_volume * 0.8 else "יציב"
-        
-        # 1. ניתוח המגמה הכללית
-        trend = technical_signals.get('trend', 'Unknown')
-        
-        analysis_parts.append("🔍 **מגמה כללית:**")
-        if trend == "Strong Uptrend":
-            analysis_parts.append(f"המניה נמצאת במגמת עלייה חזקה. המחיר (${latest_price:.2f}) נסחר מעל שני הממוצעים הנעים, כאשר הממוצע הקצר (SMA-20: ${sma_20:.2f} if sma_20 else 'N/A') נמצא מעל הממוצע הארוך (SMA-50: ${sma_50:.2f} if sma_50 else 'N/A'). זהו סימן חיובי המעיד על כוח קונים.")
-        elif trend == "Uptrend":
-            analysis_parts.append(f"המניה במגמת עלייה מתונה. המחיר (${latest_price:.2f}) נסחר מעל הממוצע הקצר (${sma_20:.2f} if sma_20 else 'N/A'), אך קרוב לממוצע הארוך. יש פוטנציאל להמשך עלייה אם תישמר התמיכה.")
-        elif trend == "Downtrend":
-            analysis_parts.append(f"המניה במגמת ירידה. המחיר (${latest_price:.2f}) נסחר מתחת לממוצע הנע הקצר (${sma_20:.2f} if sma_20 else 'N/A'). זהו סימן לחולשה, ומומלץ להמתין לסימני התאוששות לפני כניסה.")
-        elif trend == "Strong Downtrend":
-            analysis_parts.append(f"המניה במגמת ירידה חדה. המחיר (${latest_price:.2f}) נמצא מתחת לשני הממוצעים הנעים, עם הממוצע הקצר מתחת לארוך. זהו מצב שלילי המצביע על לחץ מכירות.")
-        else:
-            analysis_parts.append(f"המניה נעה בטווח צדדי ללא מגמה ברורה. המחיר (${latest_price:.2f}) מתנדנד סביב הממוצעים הנעים.")
-        analysis_parts.append("")
-        
-        # 2. רמות תמיכה והתנגדות קריטיות
-        analysis_parts.append("📏 **רמות תמיכה והתנגדות:**")
-        analysis_parts.append(f"• **התנגדות ראשונה**: ${resistance_1:.2f if resistance_1 else 0} - רמה זו נוצרה מממוצע השיאים האחרונים. פריצה מעליה תאשר המשך עלייה.")
-        analysis_parts.append(f"• **התנגדות שנייה**: ${resistance_2:.2f if resistance_2 else 0} - שיא 52 שבועות. פריצה מעל רמה זו תהיה אות חזק מאוד.")
-        analysis_parts.append(f"• **תמיכה ראשונה**: ${support_1:.2f if support_1 else 0} - רמת תמיכה מרכזית. שמירה מעליה חיונית.")
-        analysis_parts.append(f"• **תמיכה שנייה**: ${support_2:.2f if support_2 else 0} - שפל 52 שבועות. ירידה מתחת לרמה זו תהיה שלילית מאוד.")
-        
-        # מרחק מרמות
-        if resistance_1 and support_1:
-            dist_to_resistance = ((resistance_1 - latest_price) / latest_price * 100)
-            dist_to_support = ((latest_price - support_1) / latest_price * 100)
-            analysis_parts.append(f"• **מיקום נוכחי**: המחיר נמצא {dist_to_support:.1f}% מעל התמיכה ו-{dist_to_resistance:.1f}% מתחת להתנגדות.")
-        analysis_parts.append("")
-        
-        # 3. רמות פיבונאצ'י
-        analysis_parts.append("🔢 **רמות פיבונאצ'י (מבוססות על טווח 52 שבועות):**")
-        analysis_parts.append(f"• Fib 23.6%: ${fib_236:.2f if fib_236 else 0}")
-        analysis_parts.append(f"• Fib 38.2%: ${fib_382:.2f if fib_382 else 0}")
-        analysis_parts.append(f"• Fib 50.0%: ${fib_500:.2f if fib_500 else 0} - רמת איזון מרכזית")
-        analysis_parts.append(f"• Fib 61.8%: ${fib_618:.2f if fib_618 else 0} - רמת פיבונאצ'י הזהב")
-        
-        # זיהוי רמת פיבונאצ'י הקרובה
-        if all([fib_236, fib_382, fib_500, fib_618]):
-            fib_levels = [
-                (fib_236, "23.6%"),
-                (fib_382, "38.2%"),
-                (fib_500, "50.0%"),
-                (fib_618, "61.8%")
-            ]
-            closest_fib = min(fib_levels, key=lambda x: abs(x[0] - latest_price))
-            analysis_parts.append(f"• **המחיר הנוכחי קרוב לרמת Fib {closest_fib[1]}** (${closest_fib[0]:.2f})")
-        analysis_parts.append("")
-        
-        # 4. ניתוח מומנטום
-        rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else None
-        macd_diff = df['macd_diff'].iloc[-1] if 'macd_diff' in df.columns else None
-        
-        analysis_parts.append("⚡ **מומנטום ואינדיקטורים:**")
-        if rsi is not None:
-            if rsi < 30:
-                analysis_parts.append(f"• **RSI: {rsi:.1f}** - המניה במצב oversold (מכירת יתר). זו הזדמנות קנייה פוטנציאלית! המחיר עשוי להתאושש בקרוב.")
-            elif rsi > 70:
-                analysis_parts.append(f"• **RSI: {rsi:.1f}** - המניה במצב overbought (קנייה מוגזמת). סיכון גבוה לתיקון מחירים. שקול לקחת רווחים.")
-            else:
-                analysis_parts.append(f"• **RSI: {rsi:.1f}** - אזור נייטרלי. המניה לא קיצונית, מה שמאפשר תנועה לשני הכיוונים.")
-        else: analysis_parts.append("• **RSI**: לא זמין")
-        
-        if macd_diff is not None:
-            if macd_diff > 0:
-                analysis_parts.append(f"• **MACD**: חיובי ({macd_diff:.2f}) - קו ה-MACD מעל קו האות. מומנטום עולה, פוטנציאל להמשך עלייה.")
-            else:
-                analysis_parts.append(f"• **MACD**: שלילי ({macd_diff:.2f}) - קו ה-MACD מתחת לקו האות. מומנטום יורד, לחץ מכירות.")
-        else: analysis_parts.append("• **MACD**: לא זמין")
-        analysis_parts.append("")
-        
-        # 5. ניתוח נפח מסחר
-        analysis_parts.append("📊 **ניתוח נפח מסחר:**")
-        analysis_parts.append(f"• **נפח ממוצע (30 יום)**: {avg_volume:,.0f} מניות")
-        analysis_parts.append(f"• **נפח אחרון (5 ימים)**: {recent_volume:,.0f} מניות")
-        analysis_parts.append(f"• **מגמת נפח**: {volume_trend}")
-        
-        if volume_trend == "עולה":
-            analysis_parts.append("• **פרשנות**: עלייה בנפח מצביעה על עניין גובר במניה. אם המחיר עולה - זה חיובי. אם יורד - זה שלילי.")
-        elif volume_trend == "יורד":
-            analysis_parts.append("• **פרשנות**: ירידה בנפח עשויה להצביע על חוסר עניין. תנועות מחיר בנפח נמוך פחות אמינות.")
-        else:
-            analysis_parts.append("• **פרשנות**: נפח יציב מעיד על מסחר רגיל ללא אירועים חריגים.")
-        analysis_parts.append("")
-        
-        # 6. זיהוי דפוסי גרף
-        analysis_parts.append("🎯 **זיהוי דפוסי גרף:**")
-        
-        # בדיקת דפוס ראש וכתפיים
-        recent_prices = df['close'].tail(60)
-        if len(recent_prices) >= 60:
-            mid_point = len(recent_prices) // 2
-            left_shoulder = recent_prices.iloc[:20].max()
-            head = recent_prices.iloc[20:40].max()
-            right_shoulder = recent_prices.iloc[40:].max()
-            
-            if head > left_shoulder * 1.05 and head > right_shoulder * 1.05:
-                if abs(left_shoulder - right_shoulder) / left_shoulder < 0.05:
-                    analysis_parts.append("• **⚠️ דפוס ראש וכתפיים אפשרי** - דפוס היפוך שלילי. אם המחיר ישבור את קו הצוואר, צפויה ירידה.")
-                    neckline = min(recent_prices.iloc[15:25].min(), recent_prices.iloc[35:45].min())
-                    target = neckline - (head - neckline)
-                    analysis_parts.append(f"  - קו צוואר משוער: ${neckline:.2f}")
-                    analysis_parts.append(f"  - יעד ירידה פוטנציאלי: ${target:.2f}")
-        
-        # בדיקת דפוס משולש
-        highs_trend = df['high'].tail(30)
-        lows_trend = df['low'].tail(30)
-        if len(highs_trend) >= 30:
-            high_slope = (highs_trend.iloc[-1] - highs_trend.iloc[0]) / len(highs_trend)
-            low_slope = (lows_trend.iloc[-1] - lows_trend.iloc[0]) / len(lows_trend)
-            
-            if abs(high_slope) < 0.5 and abs(low_slope) < 0.5:
-                if abs(high_slope - low_slope) < 0.2:
-                    analysis_parts.append("• **📐 דפוס משולש סימטרי** - דפוס המשך. פריצה עשויה להיות חזקה לכיוון המגמה הקודמת.")
-        
-        # בדיקת ממוצעים נעים (Golden Cross / Death Cross)
-        if sma_20 and sma_50:
-            sma_20_prev = df['sma_20'].iloc[-5] if len(df) >= 5 else sma_20
-            sma_50_prev = df['sma_50'].iloc[-5] if len(df) >= 5 else sma_50
-            
-            if sma_20 > sma_50 and sma_20_prev <= sma_50_prev:
-                analysis_parts.append("• **✨ Golden Cross!** - הממוצע הקצר חצה את הארוך כלפי מעלה. סימן שורי חזק מאוד!")
-            elif sma_20 < sma_50 and sma_20_prev >= sma_50_prev:
-                analysis_parts.append("• **💀 Death Cross!** - הממוצע הקצר חצה את הארוך כלפי מטה. סימן דובי חזק!")
-        
-        if len(analysis_parts) == len([x for x in analysis_parts if x.startswith("🎯")]) + 1:
-            analysis_parts.append("• לא זוהו דפוסי גרף מיוחדים כרגע. המניה בתנועה רגילה.")
-        analysis_parts.append("")
-        
-        # 7. ניתוח תנודתיות וסיכון
-        analysis_parts.append("⚠️ **סיכון ותנודתיות:**")
-        risk_level = risk_assessment.get('level', 'Unknown')
-        volatility = risk_assessment.get('volatility', 'N/A')
-        
-        if "Low" in risk_level:
-            analysis_parts.append(f"• **רמת סיכון נמוכה** ({volatility} תנודתיות) - המניה יציבה ומתאימה למשקיעים שמרניים.")
-        elif "Moderate" in risk_level:
-            analysis_parts.append(f"• **רמת סיכון בינונית** ({volatility} תנודתיות) - תנודתיות סבירה, מתאים למשקיעים עם סובלנות ממוצעת.")
-        else:
-            analysis_parts.append(f"• **רמת סיכון גבוהה** ({volatility} תנודתיות) - המניה תנודתית מאוד! רק למשקיעים מנוסים.")
-        analysis_parts.append("")
-        
-        # 8. ביצועים אחרונים
-        change_7d = ((df['close'].iloc[-1] / df['close'].iloc[-7] - 1) * 100) if len(df) >= 7 else 0
-        change_30d = ((df['close'].iloc[-1] / df['close'].iloc[-30] - 1) * 100) if len(df) >= 30 else 0
-        change_90d = ((df['close'].iloc[-1] / df['close'].iloc[-90] - 1) * 100) if len(df) >= 90 else 0
-        
-        analysis_parts.append("📈 **ביצועים אחרונים:**")
-        analysis_parts.append(f"• שבוע אחרון: {change_7d:+.2f}%")
-        analysis_parts.append(f"• 30 יום: {change_30d:+.2f}%")
-        analysis_parts.append(f"• 90 יום: {change_90d:+.2f}%")
-        analysis_parts.append("")
-        
-        # 9. תחזית ויעדי מחיר
-        analysis_parts.append("🎯 **תחזית ויעדי מחיר:**")
-        
-        # חישוב ציון תחזית
-        forecast_score = 0
-        if trend in ["Strong Uptrend", "Uptrend"]: forecast_score += 2
-        elif trend in ["Strong Downtrend", "Downtrend"]: forecast_score -= 2
-        
-        if rsi and rsi < 40: forecast_score += 1
-        elif rsi and rsi > 60: forecast_score -= 1
-        
-        if macd_diff and macd_diff > 0: forecast_score += 1
-        elif macd_diff and macd_diff < 0: forecast_score -= 1
-        
-        if volume_trend == "עולה" and change_7d > 0: forecast_score += 1
-        elif volume_trend == "עולה" and change_7d < 0: forecast_score -= 1
-        
-        # יעדי מחיר
-        if forecast_score >= 3:
-            target_high = latest_price * 1.15
-            target_low = latest_price * 1.05
-            analysis_parts.append("✅ **תחזית חיובית מאוד**: כל האינדיקטורים מצביעים על המשך עלייה חזקה.")
-            analysis_parts.append(f"• **יעד מחיר (1-3 חודשים)**: ${target_low:.2f} - ${target_high:.2f}")
-            analysis_parts.append(f"• **פוטנציאל עלייה**: 5-15%")
-            analysis_parts.append(f"• **נקודת כניסה מומלצת**: ${latest_price * 0.98:.2f} - ${latest_price:.2f}")
-            analysis_parts.append(f"• **Stop Loss מומלץ**: ${support_1 * 0.97:.2f} (מתחת לתמיכה)")
-        elif forecast_score >= 1:
-            target_high = latest_price * 1.08
-            target_low = latest_price * 1.02
-            analysis_parts.append("📈 **תחזית חיובית**: סיכויים טובים לעלייה מתונה.")
-            analysis_parts.append(f"• **יעד מחיר (1-3 חודשים)**: ${target_low:.2f} - ${target_high:.2f}")
-            analysis_parts.append(f"• **פוטנציאל עלייה**: 2-8%")
-            analysis_parts.append(f"• **נקודת כניסה**: סביב המחיר הנוכחי או בתיקון קל")
-        elif forecast_score >= -1:
-            analysis_parts.append("➡️ **תחזית נייטרלית**: המניה צפויה לנוע בטווח. המתן לפריצה ברורה.")
-            analysis_parts.append(f"• **טווח צפוי**: ${support_1:.2f} - ${resistance_1:.2f}")
-            analysis_parts.append(f"• **אסטרטגיה**: קנה בתמיכה, מכור בהתנגדות")
-        elif forecast_score >= -3:
-            target_low = latest_price * 0.92
-            target_high = latest_price * 0.98
-            analysis_parts.append("📉 **תחזית שלילית**: סיכון לירידה מתונה.")
-            analysis_parts.append(f"• **יעד ירידה אפשרי**: ${target_low:.2f} - ${target_high:.2f}")
-            analysis_parts.append(f"• **המלצה**: שקול לקחת רווחים או להמתין מחוץ לשוק")
-        else:
-            target_low = latest_price * 0.85
-            target_high = latest_price * 0.92
-            analysis_parts.append("⛔ **תחזית שלילית מאוד**: סיכון גבוה לירידה חדה.")
-            analysis_parts.append(f"• **יעד ירידה צפוי**: ${target_low:.2f} - ${target_high:.2f}")
-            analysis_parts.append(f"• **המלצה**: הימנע מהמניה או שקול short")
-        
-        analysis_parts.append("")
-        analysis_parts.append("⚠️ **אזהרה**: ניתוח זה מבוסס על נתונים טכניים והיסטוריים בלבד ואינו מהווה ייעוץ השקעות. תמיד התייעץ עם יועץ פיננסי מקצועי לפני קבלת החלטות השקעה.")
-        
-        return "\n".join(analysis_parts)
 
+    def _generate_detailed_analysis(self, symbol, df, technical, risk, fundamental):
+        trend_he = {
+            "Strong Uptrend": "מגמת עלייה חזקה",
+            "Uptrend": "מגמת עלייה",
+            "Downtrend": "מגמת ירידה",
+            "Strong Downtrend": "מגמת ירידה חזקה",
+            "Neutral": "דשדוש",
+            "Unknown": "לא ידוע"
+        }.get(technical.get('trend'), "נייטרלית")
+        
+        return f"ניתוח עבור {symbol}: המגמה הנוכחית היא {trend_he}. הציון הכולל מעיד על רמת סיכון {risk.get('level')}."
+
+class RiskAssessor:
+    """הערכת סיכונים"""
+    def assess_risk(self, df, overview):
+        if df is None: return {"level": "Unknown", "factors": []}
+        try:
+            volatility = df['close'].pct_change().std() * (252**0.5)
+            level = "Moderate"
+            if volatility > 0.4: level = "High"
+            elif volatility < 0.2: level = "Low"
+            
+            return {
+                "level": level,
+                "volatility": f"{volatility*100:.1f}%",
+                "factors": ["High Volatility"] if level == "High" else []
+            }
+        except:
+            return {"level": "Moderate", "volatility": "N/A", "factors": []}
+
+    def analyze_investment_strategy(self, df, risk):
+        return {"strategy": "DCA", "recommendation_he": "מומלץ להשקיע במנות קטנות (DCA) כדי למצע מחיר בשל תנודתיות השוק."}
 
 class StockAnalysisSystem:
-    """מערכת מרכזית לניתוח מניות"""
-    
-    def __init__(self, config_path='config.json'):
-        self.fetcher = StockDataFetcher(config_path)
-        self.technical = TechnicalAnalyzer(config_path)
+    def __init__(self):
+        self.fetcher = StockDataFetcher()
+        self.technical = TechnicalAnalyzer()
         self.fundamental = FundamentalAnalyzer()
-        self.risk = RiskAssessor(config_path)
-        self.recommender = RecommendationEngine(config_path)
-    
-    def scan_market_cached(self, limit=30):
-        """סריקת שוק אופטימלית עם Batch Fetching וזיכרון מטמון (Cache)"""
-        cache_file = 'scan_cache.json'
-        symbols = self.fetcher.get_market_stocks(limit=limit)
-        
-        # 1. בדוק אם יש מטמון בתוקף (30 דקות)
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-                    cache_time = datetime.fromisoformat(cache_data.get('timestamp', '2000-01-01'))
-                    if (datetime.now() - cache_time).total_seconds() < 1800: # 30 min
-                        print("📡 Using cached market scan data...")
-                        return cache_data['results']
-            except Exception as e:
-                print(f"Cache read error: {e}")
+        self.recommender = RecommendationEngine()
+        self.risk = RiskAssessor()
 
-        # 2. שליפה קבוצתית (Batch Fetch) מ-Yahoo Finance
-        # זה הפתרון האמיתי לחסימות - בקשה אחת לכל המניות במקום 30 נפרדות
-        batch_df = self.fetcher.get_batch_yfinance_data(symbols)
-        
-        recommendations = []
-        if batch_df is not None and not batch_df.empty:
-            print(f"✅ Batch data received for {len(symbols)} stocks")
-            
-            for symbol in symbols:
-                try:
-                    # חילוץ נתונים למניה הבודדת מתוך ה-Batch
-                    if symbol in batch_df.columns.levels[0]:
-                        df = batch_df[symbol].copy()
-                        df = df.dropna()
-                        if df.empty or len(df) < 20: continue
-                        
-                        # התאמת שמות עמודות ל-analyzer
-                        df.columns = df.columns.str.lower()
-                        
-                        # ניתוח טכני בסיסי ומהיר לסריקה
-                        df = self.technical.calculate_indicators(df)
-                        trend = self.technical.get_trend_signal(df)
-                        rsi = df['rsi'].iloc[-1] if 'rsi' in df.columns else None
-                        
-                        # המרת סטטיסטיקה בסיסית
-                        price = float(df['close'].iloc[-1])
-                        prev_price = float(df['close'].iloc[-2]) if len(df) > 1 else price
-                        change = ((price / prev_price) - 1) * 100
-                        
-                        recommendations.append({
-                            "symbol": symbol,
-                            "name": symbol,
-                            "price": price,
-                            "change": change,
-                            "trend": trend,
-                            "rsi": round(rsi, 2) if rsi else "N/A",
-                            "score": 2 if "Uptrend" in trend else 0 # פשטות לסריקה
-                        })
-                except Exception as e:
-                    print(f"Error processing {symbol} in batch: {e}")
-                    continue
-
-        # מיון
-        recommendations.sort(key=lambda x: x["score"], reverse=True)
-        
-        # שמירה למטמון
+    def _calculate_performance(self, df):
+        if df is None or len(df) < 2: return {}
         try:
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "timestamp": datetime.now().isoformat(),
-                    "results": recommendations
-                }, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"Cache write error: {e}")
+            last = df['close'].iloc[-1]
+            return {
+                "1m": f"{((last / df['close'].iloc[-22] - 1) * 100):.1f}%" if len(df) > 22 else "N/A",
+                "1y": f"{((last / df['close'].iloc[0] - 1) * 100):.1f}%" if len(df) > 250 else "N/A"
+            }
+        except: return {}
 
-        return self._clean_data(recommendations)
+    def _prepare_chart_data(self, df):
+        if df is None: return []
+        try:
+            return [{"time": i.strftime('%Y-%m-%d'), "value": float(v)} for i, v in df['close'].tail(30).items()]
+        except: return []
 
     def _clean_data(self, data):
-        """המרת ערכי NaN ל-None כדי שה-JSON יהיה תקני"""
+        """ניקוי נתוני NaN להבטחת תאימות JSON"""
         if isinstance(data, dict):
             return {k: self._clean_data(v) for k, v in data.items()}
         elif isinstance(data, list):
-            return [self._clean_data(v) for v in data]
-        elif isinstance(data, float):
+            return [self._clean_data(i) for i in data]
+        elif isinstance(data, (float, np.float64, np.float32)):
             if np.isnan(data) or np.isinf(data):
-                return None
+                return 0.0
+            return float(data)
         return data
 
     def analyze_stock(self, symbol):
-        """ניתוח מקיף של מניה - גרסה מאוחדת ונקייה"""
-        print(f"Analyzing {symbol}...")
+        """ניתוח מקיף של מניה - הכל דרך finance-query API"""
+        print(f"🚀 Starting analysis for {symbol}...")
         
         try:
-            # 1. איסוף נתונים (עם Fallback ל-Google Finance)
+            # 1. איסוף נתונים
             df = self.fetcher.get_stock_data(symbol)
             if df is None or df.empty:
-                return {"error": f"Could not fetch data for {symbol}"}
+                return {"error": f"Could not fetch data for {symbol}. Symbol might be invalid."}
                 
             overview = self.fetcher.get_company_overview(symbol)
-            if not overview:
-                overview = {'Name': symbol, 'Symbol': symbol, 'Description': 'Data currently limited.'}
 
             # 2. חישוב אינדיקטורים
-            if len(df) > 1:
-                df = self.technical.calculate_indicators(df)
+            df = self.technical.calculate_indicators(df)
             
             # 3. ניתוח רכיבים
             technical_signals = {
@@ -1093,55 +313,35 @@ class StockAnalysisSystem:
             fundamental_analysis = self.fundamental.analyze_fundamentals(overview)
             risk_assessment = self.risk.assess_risk(df, overview)
             performance = self._calculate_performance(df)
-            
-            # חדשות (עם ניסיון נוסף אם נכשל)
-            try:
-                news = self.fetcher.get_stock_news(symbol)
-            except:
-                news = []
-            
-            # אסטרטגיית השקעה
-            try:
-                investment_strategy = self.risk.analyze_investment_strategy(df, risk_assessment)
-            except:
-                investment_strategy = {"strategy": "N/A", "recommendation_he": "לא ניתן לחשב אסטרטגיה"}
+            news = self.fetcher.get_stock_news(symbol)
+            investment_strategy = self.risk.analyze_investment_strategy(df, risk_assessment)
 
             # 4. המלצה סופית
             recommendation = self.recommender.generate_recommendation(
                 symbol, df, overview, technical_signals, risk_assessment, fundamental_analysis
             )
             
-            # 5. ניתוח מפורט (הסבר)
-            try:
-                detailed_explanation = self.recommender._generate_detailed_analysis(
-                    symbol, df, technical_signals, risk_assessment, fundamental_analysis
-                )
-            except Exception as e:
-                print(f"Detailed analysis failed: {e}")
-                detailed_explanation = recommendation.get('explanation', 'לא ניתן ליצור ניתוח מפורט כעת.')
+            # 5. ניתוח מפורט
+            detailed_explanation = self.recommender._generate_detailed_analysis(
+                symbol, df, technical_signals, risk_assessment, fundamental_analysis
+            )
 
             # 6. בניית התוצאה הסופית
             current_price = float(df['close'].iloc[-1])
             prev_close = float(df['close'].iloc[-2]) if len(df) > 1 else current_price
             change_percent = ((current_price / prev_close) - 1) * 100
             
-            # הבטחת תקינות המילון ל-API
-            rec_dict = recommendation if isinstance(recommendation, dict) else {}
-            
             result = {
                 "recommendation": {
                     "symbol": symbol,
                     "company_name": overview.get('Name', symbol),
                     "current_price": current_price,
-                    "short_term": rec_dict.get('short_term', 'Hold'),
-                    "long_term": rec_dict.get('long_term', 'Hold'),
-                    "short_term_confidence": rec_dict.get('short_term_confidence', 'Medium'),
-                    "long_term_confidence": rec_dict.get('long_term_confidence', 'Medium'),
-                    "signal_strength": rec_dict.get('signal_strength', 0),
+                    "short_term": recommendation.get('short_term', 'Hold'),
+                    "long_term": recommendation.get('long_term', 'Hold'),
+                    "short_term_confidence": recommendation.get('short_term_confidence', 'Medium'),
                     "explanation": detailed_explanation,
                     "detailed_analysis_he": detailed_explanation,
-                    "risk_level": risk_assessment.get('level', 'Unknown'),
-                    "risk_details": risk_assessment.get('factors', [])
+                    "risk_level": risk_assessment.get('level', 'Unknown')
                 },
                 "risk": risk_assessment,
                 "technical": technical_signals,
@@ -1151,7 +351,7 @@ class StockAnalysisSystem:
                     "current_price": current_price,
                     "change_percent": change_percent,
                     "high_52w": float(df['high'].max()),
-                    "low_52w": float(df['low'].max()),
+                    "low_52w": float(df['low'].min()),
                     "volume": int(df['volume'].iloc[-1])
                 },
                 "performance": performance,
@@ -1160,124 +360,19 @@ class StockAnalysisSystem:
                 "chart_data": self._prepare_chart_data(df)
             }
             
+            print(f"✅ Analysis complete for {symbol}")
             return self._clean_data(result)
             
         except Exception as e:
-            print(f"CRITICAL ERROR in analyze_stock for {symbol}: {e}")
+            print(f"❌ CRITICAL ERROR in analyze_stock for {symbol}: {e}")
             import traceback
             traceback.print_exc()
-            return {"error": f"Internal analysis error: {str(e)}"}
-
-    def _prepare_chart_data(self, df):
-        """הכנת נתונים לגרף"""
-        # לקחת 90 ימים אחרונים
-        recent_df = df.tail(90).replace({np.nan: None})
-        
-        return {
-            "dates": recent_df.index.strftime('%Y-%m-%d').tolist(),
-            "prices": recent_df['close'].tolist(),
-            "sma_20": recent_df['sma_20'].tolist() if 'sma_20' in recent_df.columns else [],
-            "sma_50": recent_df['sma_50'].tolist() if 'sma_50' in recent_df.columns else [],
-            "volume": recent_df['volume'].tolist()
-        }
-
-    def _calculate_performance(self, df):
-        """חישוב ביצועים לטווחי זמן שונים"""
-        if df is None or df.empty:
-            return {}
-            
-        current_price = df['close'].iloc[-1]
-        dates = df.index
-        results = {}
-        
-        # Helper to find close price N days ago (nearest)
-        def get_price_ago(days):
-            try:
-                target_date = dates[-1] - pd.Timedelta(days=days)
-                # Find nearest date index
-                # טריק: להשתמש ב-asof אם האינדקס ממויין, או חיפוש קרוב
-                idx = df.index.get_indexer([target_date], method='nearest')[0]
-                if idx < 0 or idx >= len(df):
-                    return None
-                return df['close'].iloc[idx]
-            except:
-                return None
-
-        # 1 Day (Regular Change)
-        prev_close = df['close'].iloc[-2] if len(df) > 1 else current_price
-        results['1D'] = {'base': float(prev_close), 'change': float((current_price / prev_close) - 1)}
-        
-        # 5 Days
-        price_5d = get_price_ago(5)
-        if price_5d: results['5D'] = {'base': float(price_5d), 'change': float((current_price / price_5d) - 1)}
-        
-        # 1 Month (30 days)
-        price_1m = get_price_ago(30)
-        if price_1m: results['1M'] = {'base': float(price_1m), 'change': float((current_price / price_1m) - 1)}
-        
-        # 6 Months (180 days)
-        price_6m = get_price_ago(180)
-        if price_6m: results['6M'] = {'base': float(price_6m), 'change': float((current_price / price_6m) - 1)}
-        
-        # YTD (Start of current year)
-        try:
-            current_year = dates[-1].year
-            start_of_year = pd.Timestamp(f"{current_year}-01-01").tz_localize(dates[-1].tz)
-            # Find first trading day of year
-            ytd_idx = df.index.searchsorted(start_of_year)
-            if ytd_idx < len(df):
-                price_ytd = df['close'].iloc[ytd_idx]
-                results['YTD'] = {'base': float(price_ytd), 'change': float((current_price / price_ytd) - 1)}
-        except:
-            pass # YTD not available
-            
-        # 1 Year
-        price_1y = get_price_ago(365)
-        if price_1y: results['1Y'] = {'base': float(price_1y), 'change': float((current_price / price_1y) - 1)}
-        
-        # 5 Years
-        price_5y = get_price_ago(365*5)
-        if price_5y: results['5Y'] = {'base': float(price_5y), 'change': float((current_price / price_5y) - 1)}
-        
-        return results
-
-    def _fetch_google_news_rss(self, symbol):
-        """גיבוי: משיכת חדשות מ-Google News RSS"""
-        try:
-            print(f"Fetching backup news from Google RSS for {symbol}...")
-            url = f"https://news.google.com/rss/search?q={symbol}+stock&hl=en-US&gl=US&ceid=US:en"
-            response = requests.get(url, timeout=5)
-            if response.status_code == 200:
-                root = ET.fromstring(response.content)
-                news_items = []
-                for item in root.findall('.//item')[:5]:
-                    title = item.find('title').text
-                    link = item.find('link').text
-                    pubDate = item.find('pubDate').text
-                    source = item.find('source').text if item.find('source') is not None else 'Google News'
-                    
-                    # המרת תאריך
-                    try:
-                        dt = datetime.strptime(pubDate, '%a, %d %b %Y %H:%M:%S %Z')
-                        pub_fmt = dt.strftime('%Y-%m-%d %H:%M')
-                    except:
-                        pub_fmt = pubDate
-                        
-                    news_items.append({
-                        'title': title,
-                        'publisher': source,
-                        'link': link,
-                        'published': pub_fmt,
-                        'type': 'STORY'
-                    })
-                return news_items
-        except Exception as e:
-            print(f"Google RSS failed: {e}")
-        return []
-
+            return {"error": str(e)}
 
 if __name__ == "__main__":
-    # בדיקה
     system = StockAnalysisSystem()
-    result = system.analyze_stock("AAPL")
-    print(json.dumps(result, indent=2, default=str))
+    import sys
+    symbol = sys.argv[1] if len(sys.argv) > 1 else "AAPL"
+    result = system.analyze_stock(symbol)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
