@@ -33,9 +33,9 @@ class StockDataFetcher:
             print(f"❌ Connection Error for {endpoint}: {e}")
         return None
 
-    def get_stock_data(self, symbol, range='2y', interval='1d'):
+    def get_stock_data(self, symbol, range='5y', interval='1d'):
         """קבלת נתוני מחירים היסטוריים (Candles)"""
-        print(f"Fetching chart for {symbol}...")
+        print(f"Fetching {range} chart for {symbol}...")
         res = self._get(f"chart/{symbol}", params={'range': range, 'interval': interval})
         
         if res and 'candles' in res:
@@ -55,24 +55,24 @@ class StockDataFetcher:
     def get_company_overview(self, symbol):
         """קבלת מידע פונדמנטלי (Quote Data)"""
         print(f"Fetching info for {symbol}...")
-        res = self._get(f"quote/{symbol}") # /quote/ usually has summary info in finance-query
+        res = self._get(f"quote/{symbol}")
         if res:
-            # המרה למבנה ש-StockAnalyzer מצפה לו (מתואם לשדות של finance-query/Yahoo)
+            # המרה למבנה שה-Frontend (app.js) מצפה לו - snake_case
             return {
-                'Name': res.get('longName', res.get('shortName', symbol)),
-                'Symbol': symbol,
-                'Description': res.get('longBusinessSummary', 'N/A'),
-                'Sector': res.get('sector', 'N/A'),
-                'Industry': res.get('industry', 'N/A'),
-                'MarketCapitalization': res.get('marketCap', 'N/A'),
-                'PERatio': res.get('trailingPE', 'N/A'),
-                'Beta': res.get('beta', 'N/A'),
-                'DividendYield': res.get('dividendYield', 'N/A'),
-                'ProfitMargin': res.get('profitMargins', 'N/A'),
-                'FiftyTwoWeekHigh': res.get('fiftyTwoWeekHigh', 'N/A'),
-                'FiftyTwoWeekLow': res.get('fiftyTwoWeekLow', 'N/A')
+                'name': res.get('longName', res.get('shortName', symbol)),
+                'symbol': symbol,
+                'description': res.get('longBusinessSummary', 'N/A'),
+                'sector': res.get('sector', 'N/A'),
+                'industry': res.get('industry', 'N/A'),
+                'market_cap': res.get('marketCap', 'N/A'),
+                'pe_ratio': res.get('trailingPE', 'N/A'),
+                'beta': res.get('beta', 'N/A'),
+                'dividend_yield': res.get('dividendYield', 'N/A'),
+                'profit_margin': res.get('profitMargins', 'N/A'),
+                'high_52w': res.get('fiftyTwoWeekHigh', 'N/A'),
+                'low_52w': res.get('fiftyTwoWeekLow', 'N/A')
             }
-        return {'Name': symbol, 'Symbol': symbol}
+        return {'name': symbol, 'symbol': symbol}
 
     def get_stock_news(self, symbol):
         """קבלת חדשות אחרונות"""
@@ -100,7 +100,7 @@ class StockDataFetcher:
         return formatted_news
 
     def get_batch_quotes(self, symbols):
-        """קבלת מחירים בזמן אמת עבור קבוצת מניות (מעולה לסריקת שוק)"""
+        """קבלת מחירים בזמן אמת עבור קבוצת מניות"""
         if isinstance(symbols, list):
             symbols_str = ",".join(symbols)
         else:
@@ -108,10 +108,17 @@ class StockDataFetcher:
             
         res = self._get(f"quote/{symbols_str}")
         if res:
-            # אם זה סמל יחיד, המערכת מחזירה אובייקט, אם כמה - רשימה
-            if isinstance(res, dict):
-                return [res]
-            return res
+            # Handle list vs dict vs result nesting
+            data = res
+            if isinstance(res, dict) and 'result' in res:
+                data = res['result']
+            elif isinstance(res, dict) and 'quoteResponse' in res:
+                data = res['quoteResponse'].get('result', [])
+                
+            if isinstance(data, dict):
+                return [data]
+            if isinstance(data, list):
+                return data
         return []
 
     def get_market_summary(self):
@@ -224,15 +231,37 @@ class RecommendationEngine:
 
     def _generate_detailed_analysis(self, symbol, df, technical, risk, fundamental):
         trend_he = {
-            "Strong Uptrend": "מגמת עלייה חזקה",
+            "Strong Uptrend": "מגמת עלייה חזקה מאוד",
             "Uptrend": "מגמת עלייה",
             "Downtrend": "מגמת ירידה",
             "Strong Downtrend": "מגמת ירידה חזקה",
-            "Neutral": "דשדוש",
+            "Neutral": "דשדוש (ללא כיוון ברור)",
             "Unknown": "לא ידוע"
         }.get(technical.get('trend'), "נייטרלית")
         
-        return f"ניתוח עבור {symbol}: המגמה הנוכחית היא {trend_he}. הציון הכולל מעיד על רמת סיכון {risk.get('level')}."
+        momentum = technical.get('momentum', 'N/A')
+        momentum_he = "חיובי" if momentum == "Overbought" else "שלילי" if momentum == "Oversold" else "נייטרלי"
+        
+        analysis = [
+            f"**ניתוח מקיף עבור {symbol}:**",
+            f"המניה נמצאת כרגע ב{trend_he}. מבחינה טכנית, המומנטום הוא {momentum_he}.",
+            f"רמת הסיכון הכוללת היא **{risk.get('level')}**, עם תנודתיות שנתית של {risk.get('volatility')}."
+        ]
+        
+        if fundamental.get('score', 0) > 0:
+            analysis.append("הנתונים הפונדמנטליים מצביעים על חוסן כלכלי יחסי או הערכת חסר בשוק.")
+        elif fundamental.get('score', 0) < 0:
+            analysis.append("קיימות נורות אזהרה בנתונים הפונדמנטליים, ייתכן שהמניה יקרה מדי כרגע.")
+            
+        analysis.append(f"לסיכום, אסטרטגיית ההשקעה המומלצת לדעתנו היא **{rec_map(symbol, technical, fundamental)}**.")
+        
+        return "\n".join(analysis)
+
+def rec_map(symbol, technical, fundamental):
+    # Helper for summarizing strategy in text
+    score = fundamental.get('score', 0)
+    if score > 1: return "קנייה לטווח ארוך"
+    return "מעקב הדוק"
 
 class RiskAssessor:
     """הערכת סיכונים"""
@@ -266,18 +295,58 @@ class StockAnalysisSystem:
     def _calculate_performance(self, df):
         if df is None or len(df) < 2: return {}
         try:
-            last = df['close'].iloc[-1]
-            return {
-                "1m": f"{((last / df['close'].iloc[-22] - 1) * 100):.1f}%" if len(df) > 22 else "N/A",
-                "1y": f"{((last / df['close'].iloc[0] - 1) * 100):.1f}%" if len(df) > 250 else "N/A"
-            }
+            current_price = df['close'].iloc[-1]
+            dates = df.index
+            results = {}
+            
+            def get_perf(days):
+                try:
+                    target_date = dates[-1] - timedelta(days=days)
+                    # Find nearest date
+                    idx = dates.get_indexer([target_date], method='nearest')[0]
+                    base_price = df['close'].iloc[idx]
+                    return {
+                        "base": float(base_price),
+                        "change": float((current_price / base_price) - 1)
+                    }
+                except: return None
+
+            results['1D'] = get_perf(1)
+            results['5D'] = get_perf(5)
+            results['1M'] = get_perf(30)
+            results['6M'] = get_perf(180)
+            
+            # YTD Calculation
+            try:
+                start_of_year = datetime(dates[-1].year, 1, 1)
+                idx_ytd = dates.get_indexer([start_of_year], method='nearest')[0]
+                base_ytd = df['close'].iloc[idx_ytd]
+                results['YTD'] = {
+                    "base": float(base_ytd),
+                    "change": float((current_price / base_ytd) - 1)
+                }
+            except: pass
+
+            results['1Y'] = get_perf(365)
+            results['5Y'] = get_perf(1825)
+            
+            # Filter out Nones
+            return {k: v for k, v in results.items() if v}
         except: return {}
 
     def _prepare_chart_data(self, df):
-        if df is None: return []
+        if df is None or df.empty: return {"dates": [], "prices": [], "sma_20": [], "sma_50": []}
         try:
-            return [{"time": i.strftime('%Y-%m-%d'), "value": float(v)} for i, v in df['close'].tail(30).items()]
-        except: return []
+            # show full data (up to 5 years if fetched)
+            return {
+                "dates": df.index.strftime('%Y-%m-%d').tolist(),
+                "prices": df['close'].tolist(),
+                "sma_20": [float(x) if not pd.isna(x) else None for x in df['sma_20']] if 'sma_20' in df.columns else [],
+                "sma_50": [float(x) if not pd.isna(x) else None for x in df['sma_50']] if 'sma_50' in df.columns else []
+            }
+        except Exception as e:
+            print(f"Error preparing chart data: {e}")
+            return {"dates": [], "prices": [], "sma_20": [], "sma_50": []}
 
     def _clean_data(self, data):
         """ניקוי נתוני NaN להבטחת תאימות JSON"""
@@ -335,7 +404,7 @@ class StockAnalysisSystem:
             result = {
                 "recommendation": {
                     "symbol": symbol,
-                    "company_name": overview.get('Name', symbol),
+                    "company_name": overview.get('name', symbol),
                     "current_price": current_price,
                     "short_term": recommendation.get('short_term', 'Hold'),
                     "long_term": recommendation.get('long_term', 'Hold'),

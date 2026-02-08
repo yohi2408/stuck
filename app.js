@@ -124,31 +124,31 @@ function displayStockData(data) {
     changeEl.textContent = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
     changeEl.className = `price-change ${change >= 0 ? 'positive' : 'negative'}`;
 
-    // Price Stats - using price_data object
-    if (data.price_data) {
-        const change30d = data.price_data.change_30d || 0;
-        document.getElementById('change30d').textContent = `${change30d.toFixed(2)}%`;
-        document.getElementById('change30d').className = `metric-value ${change30d >= 0 ? 'positive' : 'negative'}`;
-
-        document.getElementById('high52w').textContent = `$${data.price_data.high_52w.toFixed(2)}`;
-        document.getElementById('low52w').textContent = `$${data.price_data.low_52w.toFixed(2)}`;
+    // Price Stats - using performance object
+    if (data.performance && data.performance['1M']) {
+        const change1m = data.performance['1M'].change * 100;
+        document.getElementById('change30d').textContent = `${change1m.toFixed(2)}%`;
+        document.getElementById('change30d').className = `metric-value ${change1m >= 0 ? 'positive' : 'negative'}`;
     }
 
-    // Explanation (Optional now)
-    const explanationEl = document.getElementById('explanation');
-    if (explanationEl) {
-        explanationEl.textContent = data.recommendation.explanation;
-    }
+    document.getElementById('high52w').textContent = `$${data.price_data.high_52w.toFixed(2)}`;
+    document.getElementById('low52w').textContent = `$${data.price_data.low_52w.toFixed(2)}`;
+}
 
-    // Performance Bar
-    if (data.performance) {
-        perfBasePrices = {}; // Reset
-        // שמירת מחירי הבסיס לחישובים חיים
-        for (const [key, val] of Object.entries(data.performance)) {
-            perfBasePrices[key] = val.base;
-        }
-        renderPerformance(data.performance);
+// Explanation (Optional now)
+const explanationEl = document.getElementById('explanation');
+if (explanationEl) {
+    explanationEl.textContent = data.recommendation.explanation;
+}
+
+// Performance Bar
+if (data.performance) {
+    perfBasePrices = {}; // Reset
+    // שמירת מחירי הבסיס לחישובים חיים
+    for (const [key, val] of Object.entries(data.performance)) {
+        perfBasePrices[key] = val.base;
     }
+    renderPerformance(data.performance);
 
     // Investment Strategy (NEW)
     if (data.investment_strategy) {
@@ -545,11 +545,13 @@ function formatPrice(price) {
 }
 
 function getBadgeClass(recommendation) {
-    if (!recommendation) return 'badge-neutral'; // Added null check
-    if (recommendation.includes('Strong Buy')) return 'badge-strong-buy'; // Changed to specific class
-    if (recommendation.includes('Buy')) return 'badge-buy'; // Changed to specific class
-    if (recommendation.includes('Hold')) return 'badge-warning';
-    if (recommendation.includes('Sell') || recommendation.includes('Avoid')) return 'badge-danger';
+    if (!recommendation) return 'badge-neutral';
+    const recShort = recommendation.toLowerCase();
+    if (recShort.includes('strong buy')) return 'strong-buy';
+    if (recShort.includes('buy')) return 'buy';
+    if (recShort.includes('hold')) return 'hold';
+    if (recShort.includes('strong sell')) return 'strong-sell';
+    if (recShort.includes('sell') || recShort.includes('avoid')) return 'sell';
     return 'badge-neutral';
 }
 
