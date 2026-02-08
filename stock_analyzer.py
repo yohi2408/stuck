@@ -16,213 +16,176 @@ class StockDataFetcher:
     def __init__(self, config_path='config.json'):
         with open(config_path, 'r') as f:
             self.config = json.load(f)
+        
         self.api_key = self.config['api_key']
+        self.finnhub_key = self.config['finnhub_key']
         self.base_url = 'https://www.alphavantage.co/query'
         
-        # Finnhub client - Fix duplicate key issue
-        self.finnhub_key = self.config.get('finnhub_key', '').strip()
-        if len(self.finnhub_key) > 35 and self.finnhub_key[:len(self.finnhub_key)//2] == self.finnhub_key[len(self.finnhub_key)//2:]:
-            # It's a duplicate paste (common issue)
-            self.finnhub_key = self.finnhub_key[:len(self.finnhub_key)//2]
-            
-        if self.finnhub_key and "PUT_YOUR" not in self.finnhub_key:
+        # התחברות ל-Finnhub
+        try:
             self.finnhub_client = finnhub.Client(api_key=self.finnhub_key)
-        else:
+        except Exception as e:
+            print(f"Failed to initialize Finnhub: {e}")
             self.finnhub_client = None
-            
-        # Requests Session with browser headers to avoid blocks
+
+        # Session with retries for Yahoo Finance
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
         })
-    
+
     def get_stock_data(self, symbol, outputsize='full'):
-        """קבלת נתוני מחירים יומיים - גרסת PROD ללא דמו"""
+        """קבלת נתוני מחירים יומיים - גרסת Production משופרת עם Google Finance"""
         
-        # 1. Try Finnhub
+        # 1. ניסיון עם Finnhub (אחד המקורות הכי אמינים לנתונים היסטוריים)
         if self.finnhub_client:
             try:
                 df = self._get_finnhub_data(symbol)
                 if df is not None and not df.empty:
-                    print(f"✅ Data from Finnhub for {symbol}")
+                    print(f"✅ Data fetched from Finnhub for {symbol}")
+                    # נסה לעדכן את המחיר האחרון מ-Google Finance לדיוק מקסימלי
+                    latest_google = self._get_google_price(symbol)
+                    if latest_google:
+                        df.iloc[-1, df.columns.get_loc('close')] = latest_google
+                        print(f"📍 Updated latest price from Google Finance: ${latest_google}")
                     return df
             except Exception as e:
-                print(f"Finnhub failed: {e}")
-        
-        # 2. Try Alpha Vantage
-        try:
-            params = {'function': 'TIME_SERIES_DAILY', 'symbol': symbol, 'apikey': self.api_key}
-            r = requests.get(self.base_url, params=params, timeout=5)
-            data = r.json()
-            if "Note" in data and "rate limit" in str(data).lower():
-                print(f"⚠️ Alpha Vantage Rate Limit for {symbol}")
-            elif 'Time Series (Daily)' in data:
-                df = pd.DataFrame.from_dict(data['Time Series (Daily)'], orient='index')
-                df.columns = ['open', 'high', 'low', 'close', 'volume']
-                df.index = pd.to_datetime(df.index)
-                df = df.sort_index().astype(float)
-                print(f"✅ Data from Alpha Vantage for {symbol}")
-                return df
-            elif 'Error Message' in data:
-                print(f"❌ Alpha Vantage Error: {data['Error Message']}")
-        except Exception as e:
-            print(f"Alpha Vantage failed: {e}")
+                print(f"Finnhub historical fetch failed for {symbol}: {e}")
 
-        # 3. Try Yahoo Finance (Enhanced for Production)
+        # 2. ניסיון עם Yahoo Finance (משופר עם ניסיונות חוזרים)
         df = self._get_yfinance_data(symbol)
         if df is not None and not df.empty:
+            print(f"✅ Data fetched from Yahoo Finance for {symbol}")
+            # נסה לעדכן את המחיר האחרון מ-Google Finance
+            latest_google = self._get_google_price(symbol)
+            if latest_google:
+                df.iloc[-1, df.columns.get_loc('close')] = latest_google
             return df
-            
-        # 4. Final Fail
-        print(f"⛔ CRITICAL: No real data could be fetched for {symbol} after all attempts.")
+
+        # 3. מוצא אחרון: Google Finance (Scraping)
+        # אם כל השאר נכשל, ננסה להביא לפחות את המחיר הנוכחי מגוגל
+        google_price = self._get_google_price(symbol)
+        if google_price:
+            print(f"🚀 Success: Fetched real-time price from Google Finance for {symbol}")
+            # יצירת DataFrame בסיסי כדי שהמערכת תוכל להציג את המחיר
+            dates = [datetime.now()]
+            df = pd.DataFrame({
+                'open': [google_price], 'high': [google_price], 
+                'low': [google_price], 'close': [google_price], 'volume': [0]
+            }, index=dates)
+            return df
+
+        print(f"❌ ERROR: All real data sources failed for {symbol}.")
         return None
-    
+
     def _get_finnhub_data(self, symbol):
-        """קבלת נתונים מ-Finnhub"""
+        """משיכת נתוני נרות מ-Finnhub"""
         try:
-            # Get data for the last 2 years
-            end_date = int(datetime.now().timestamp())
-            start_date = int((datetime.now() - timedelta(days=730)).timestamp())
-            
-            # Fetch candle data
-            res = self.finnhub_client.stock_candles(symbol, 'D', start_date, end_date)
-            
-            if res['s'] == 'ok':
+            end = int(datetime.now().timestamp())
+            start = int((datetime.now() - timedelta(days=730)).timestamp())
+            res = self.finnhub_client.stock_candles(symbol, 'D', start, end)
+            if res.get('s') == 'ok':
                 df = pd.DataFrame({
-                    'open': res['o'],
-                    'high': res['h'],
-                    'low': res['l'],
-                    'close': res['c'],
-                    'volume': res['v']
-                })
-                df.index = pd.to_datetime(res['t'], unit='s')
+                    'open': res['o'], 'high': res['h'], 'low': res['l'], 
+                    'close': res['c'], 'volume': res['v']
+                }, index=pd.to_datetime(res['t'], unit='s'))
                 return df
-            else:
-                print(f"Finnhub returned status: {res['s']}")
-                return None
         except Exception as e:
-            print(f"Finnhub error: {e}")
-            return None
-    
+            print(f"Finnhub internal error: {e}")
+        return None
+
     def _get_yfinance_data(self, symbol):
-        """משיכת נתונים מ-Yahoo Finance עם מנגנון עקיפת חסימות מתקדם"""
+        """משיכת נתונים מ-Yahoo Finance עם עקיפת חסימות"""
         import time
-        max_retries = 3
-        
-        for attempt in range(max_retries):
+        for attempt in range(3):
             try:
-                print(f"Trying Yahoo Finance for {symbol} (Attempt {attempt + 1})...")
-                user_agents = [
+                ua = [
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
                     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0'
+                    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
                 ]
-                
-                headers = {
-                    'User-Agent': np.random.choice(user_agents),
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                    'DNT': '1',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1',
-                }
-                self.session.headers.update(headers)
-                
+                self.session.headers.update({'User-Agent': np.random.choice(ua)})
                 ticker = yf.Ticker(symbol, session=self.session)
                 df = ticker.history(period='2y', auto_adjust=True)
-                
-                if df is not None and not df.empty and len(df) > 10:
-                    print(f"✅ Got real data from Yahoo Finance for {symbol} on attempt {attempt + 1}")
+                if not df.empty and len(df) > 10:
                     df.columns = df.columns.str.lower()
                     return df
+                time.sleep(1)
+            except:
+                time.sleep(1)
+        return None
+
+    def _get_google_price(self, symbol):
+        """משיכת מחיר בזמן אמת מ-Google Finance (Scraping)"""
+        try:
+            from bs4 import BeautifulSoup
+            # נסה סיומות שונות עבור בורסות ארה"ב
+            for market in ['NASDAQ', 'NYSE', 'CURRENCY']:
+                url = f"https://www.google.com/finance/quote/{symbol}:{market}"
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'}
+                r = requests.get(url, headers=headers, timeout=10)
                 
-                print(f"Attempt {attempt + 1}: Yahoo returned empty or minimal data for {symbol}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 * (attempt + 1)) # Exponential backoff
+                if r.status_code == 200:
+                    soup = BeautifulSoup(r.text, 'html.parser')
+                    # מחפש את הקלאס שהוזכר בכתבה או סלקטורים נפוצים אחרים
+                    selectors = [
+                        ('div', {'class': 'YMlKec fxKbKc'}), # המחיר הראשי
+                        ('div', {'class': 'YMlKec'}),
+                        ('span', {'class': 'IsqQVc'})
+                    ]
                     
-            except Exception as e:
-                print(f"Yahoo Finance attempt {attempt + 1} failed for {symbol}: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 * (attempt + 1))
-        
+                    for tag, attrs in selectors:
+                        elem = soup.find(tag, attrs)
+                        if elem:
+                            price_text = elem.text.replace('$', '').replace(',', '').strip()
+                            if price_text:
+                                return float(price_text)
+            
+            # אם לא מצאנו עבור ארה"ב, ננסה בלי ציון בורסה
+            url = f"https://www.google.com/finance/quote/{symbol}"
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, 'html.parser')
+                elem = soup.find('div', {'class': 'YMlKec fxKbKc'})
+                if elem:
+                    return float(elem.text.replace('$', '').replace(',', '').strip())
+        except Exception as e:
+            print(f"Google Finance scrape failed for {symbol}: {e}")
         return None
 
     def _generate_mock_data(self, symbol):
-        """ייצור נתוני דמו כספק אחרון בהחלט כשהכל חסום (מושבת ב-PROD)"""
-        # למרות שהמשתמש ביקש בלי דמו, אנחנו שומרים את הפונקציה למקרה חירום 
-        # אבל ב-get_stock_data היא לא תיקרא יותר.
+        """פונקציה זו הושבתה בגרסת ה-Production"""
         return None
 
     def get_batch_yfinance_data(self, symbols, period='2y'):
-        """קבלת נתונים לקבוצת מניות בבת אחת - יעיל מאוד למניעת חסימות"""
+        """קבלת נתונים לקבוצת מניות בבת אחת"""
         try:
-            print(f"🔍 Batch fetching {len(symbols)} stocks from Yahoo Finance...")
-            # yf.download is much better for large batches
-            data = yf.download(symbols, period=period, interval='1d', group_by='ticker', session=self.session)
-            return data
-        except Exception as e:
-            print(f"Batch fetch failed: {e}")
-            return None
-    
+            return yf.download(symbols, period=period, interval='1d', group_by='ticker', session=self.session)
+        except: return None
+
     def get_company_overview(self, symbol):
-        """קבלת מידע פונדמנטלי על החברה"""
-        
-        # Try Finnhub first
+        """קבלת מידע פונדמנטלי"""
+        # Try Finnhub first (Company Profile 2)
         if self.finnhub_client:
             try:
-                print(f"Trying Finnhub overview for {symbol}...")
                 profile = self.finnhub_client.company_profile2(symbol=symbol)
-                
-                if profile and 'name' in profile:
-                    print(f"✅ Got real overview from Finnhub for {symbol}")
+                if profile:
                     return {
-                        'Symbol': symbol,
-                        'Name': profile.get('name', 'N/A'),
-                        'MarketCapitalization': profile.get('marketCapitalization', 0) * 1000000,  # Finnhub returns in millions
-                        'PERatio': 'N/A',  # Will get from quote
-                        'DividendYield': 'N/A',
-                        'Beta': 'N/A',
-                        'Sector': profile.get('finnhubIndustry', 'N/A'),
-                        'Description': f"{profile.get('name', '')} - {profile.get('exchange', '')} listed company"
+                        'Name': profile.get('name', symbol),
+                        'Industry': profile.get('finnhubIndustry', 'N/A'),
+                        'MarketCapitalization': profile.get('marketCapitalization', 'N/A'),
+                        'Beta': 'N/A' # Finnhub returns this in basic financials
                     }
-            except Exception as e:
-                print(f"Finnhub overview failed: {e}")
+            except: pass
         
-        # Try Alpha Vantage
+        # Backup: Alpha Vantage
         try:
-            params = {
-                'function': 'OVERVIEW',
-                'symbol': symbol,
-                'apikey': self.api_key
-            }
-            response = requests.get(self.base_url, params=params, timeout=10)
-            data = response.json()
-            
-            if 'Symbol' in data:
-                print(f"✅ Got real overview from Alpha Vantage for {symbol}")
-                return data
-            
-            # Fallback to yfinance
-            print(f"Alpha Vantage overview failed for {symbol}, using Yahoo Finance...")
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            return {
-                'Symbol': symbol,
-                'Name': info.get('longName', 'N/A'),
-                'MarketCapitalization': info.get('marketCap', 'N/A'),
-                'PERatio': info.get('trailingPE', 'N/A'),
-                'DividendYield': info.get('dividendYield', 'N/A'),
-                'Beta': info.get('beta', 'N/A'),
-                'Sector': info.get('sector', 'N/A'),
-                'Description': info.get('longBusinessSummary', 'N/A')
-            }
-        except Exception as e:
-            print(f"Yahoo Finance overview failed: {e}")
-            return {} # Real data only
-            
+            params = {'function': 'OVERVIEW', 'symbol': symbol, 'apikey': self.api_key}
+            r = requests.get(self.base_url, params=params, timeout=5)
+            return r.json()
+        except: return {'Name': symbol}
+
     def get_stock_news(self, symbol):
-        """קבלת חדשות אחרונות על המניה"""
         # Try Google News RSS first as it allows specific query "SYMBOL stock"
         # which yields more relevant results than generic Yahoo ticker news
         google_news = self._fetch_google_news_rss(symbol)
