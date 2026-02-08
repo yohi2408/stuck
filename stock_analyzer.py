@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import numpy as np
+import os
 from datetime import datetime, timedelta
 import json
 from ta.trend import SMAIndicator, EMAIndicator, MACD
@@ -368,6 +369,65 @@ class StockAnalysisSystem:
             import traceback
             traceback.print_exc()
             return {"error": str(e)}
+
+    def scan_market_cached(self, limit=30):
+        """סריקת שוק מהירה עם מטמון מקומי"""
+        cache_file = "scan_cache.json"
+        
+        # 1. ניסיון קריאה מהמטמון
+        try:
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    cache_data = json.load(f)
+                    timestamp = datetime.fromisoformat(cache_data["timestamp"])
+                    if datetime.now() - timestamp < timedelta(minutes=30):
+                        print("🚀 Returning cached market scan results")
+                        return cache_data["results"]
+        except: pass
+
+        # 2. הרצת סריקה חדשה
+        print(f"🔍 Performing fresh market scan for top {limit} stocks...")
+        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "BRK-B", "JPM", "V", 
+                   "WMT", "JNJ", "PG", "MA", "HD", "DIS", "NFLX", "ADBE", "CRM", "PYPL",
+                   "INTC", "AMD", "CSCO", "PEP", "KO", "ORCL", "COST", "ACN", "AVGO", "TXN"][:limit]
+        
+        quotes = self.fetcher.get_batch_quotes(symbols)
+        recommendations = []
+        
+        for q in quotes:
+            symbol = q.get('symbol', 'Unknown')
+            price = q.get('regularMarketPrice', 0)
+            change = q.get('regularMarketChangePercent', 0)
+            
+            # לוודא שיש נתונים בסיסיים לחישוב מגמה
+            trend = "Uptrend" if change > 0 else "Downtrend"
+            if abs(change) > 3: trend = f"Strong {trend}"
+            
+            # ציון פשוט (0-5)
+            score = 1
+            if change > 0: score += 1
+            if change > 2: score += 1
+            
+            recommendations.append({
+                "symbol": symbol,
+                "name": q.get('shortName', symbol),
+                "price": price,
+                "change": change,
+                "trend": trend,
+                "score": score,
+                "rsi": "N/A" # בשביל ה-fast scan לא נחשב RSI עכשיו
+            })
+            
+        # 3. שמירה למטמון
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "timestamp": datetime.now().isoformat(),
+                    "results": recommendations
+                }, f, ensure_ascii=False, indent=2)
+        except: pass
+
+        return recommendations
 
 if __name__ == "__main__":
     system = StockAnalysisSystem()

@@ -5,7 +5,6 @@ import pandas as pd
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from stock_analyzer import StockAnalysisSystem
-import yfinance as yf
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)  # אפשר גישה מ-frontend
@@ -15,26 +14,7 @@ analyzer = StockAnalysisSystem()
 
 def get_market_stocks(limit=50):
     """קבלת רשימת מניות מהשוק האמריקאי"""
-    try:
-        # קבלת מניות מ-S&P 500
-        sp500_url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        import pandas as pd
-        tables = pd.read_html(sp500_url)
-        sp500_table = tables[0]
-        symbols = sp500_table['Symbol'].tolist()[:limit]
-        
-        print(f"📊 Scanning {len(symbols)} stocks from S&P 500...")
-        return symbols
-    except Exception as e:
-        print(f"Failed to fetch S&P 500 list: {e}")
-        # Fallback: רשימה מורחבת של מניות פופולריות
-        return [
-            'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B',
-            'JPM', 'V', 'WMT', 'JNJ', 'PG', 'MA', 'HD', 'DIS', 'NFLX', 'ADBE',
-            'CRM', 'PYPL', 'INTC', 'AMD', 'CSCO', 'PEP', 'KO', 'NKE', 'MCD',
-            'COST', 'ABBV', 'TMO', 'ACN', 'LLY', 'AVGO', 'TXN', 'ORCL', 'DHR',
-            'UNH', 'BAC', 'CVX', 'XOM', 'PFE', 'MRK', 'ABT', 'WFC', 'CMCSA'
-        ][:limit]
+    return ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "BRK-B", "JPM", "V"][:limit]
 
 @app.route('/')
 def home():
@@ -60,55 +40,33 @@ def analyze_stock(symbol):
         if "error" in result:
             return jsonify({"error": result["error"]}), 404
         
-        # התוצאה כבר מכילה את המבנה הנכון מ-stock_analyzer.py
-        # result["price_data"] הוא מילון עם סטטיסטיקות
-        # result["chart_data"] הוא מילון עם נתוני הגרף
-        
-        return jsonify({
-            "recommendation": result["recommendation"],
-            "technical": result["technical"],
-            "fundamental": result["fundamental"],
-            "risk": result["risk"],
-            "overview": result["overview"],
-            "price_data": result["price_data"],
-            "chart_data": result["chart_data"],
-            "chart_data": result["chart_data"],
-            "performance": result["performance"], # העברת נתוני הביצועים
-            "investment_strategy": result["investment_strategy"],
-            "news": result["news"]
-        })
+        return jsonify(result)
     except Exception as e:
-        print(f"Error in analyze_stock: {e}") # לוג לשגיאה
+        print(f"Error in analyze_stock: {e}") 
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/price/<symbol>')
 def get_live_price(symbol):
-    """קבלת מחיר מניה בזמן אמת (קל ומהיר)"""
+    """קבלת מחיר מניה בזמן אמת (קל ומהיר דרך finance-query)"""
     try:
         symbol = symbol.upper()
-        # שימוש ב-yfinance לקבלת נתונים מהירים
-        ticker = yf.Ticker(symbol)
-        # נסה לקבל נתונים מ-fast_info קודם (מהיר יותר)
-        try:
-            current_price = ticker.fast_info.last_price
-            prev_close = ticker.fast_info.previous_close
-        except:
-            # Fallback ל-history אם fast_info נכשל
-            df = ticker.history(period="2d")
-            if len(df) < 1:
-                return jsonify({"error": "No data found"}), 404
-            current_price = df['Close'].iloc[-1]
-            prev_close = df['Close'].iloc[-2] if len(df) > 1 else current_price
-
+        quotes = analyzer.fetcher.get_batch_quotes([symbol])
+        if not quotes or len(quotes) == 0:
+            return jsonify({"error": "No data found"}), 404
+            
+        quote = quotes[0]
+        current_price = quote.get('regularMarketPrice', quote.get('price', 0))
+        prev_close = quote.get('regularMarketPreviousClose', current_price)
+        
         change = current_price - prev_close
-        change_percent = (change / prev_close) * 100
+        change_percent = (change / prev_close) * 100 if prev_close else 0
         
         return jsonify({
             "symbol": symbol,
             "price": current_price,
             "change": change,
             "change_percent": change_percent,
-            "timestamp": pd.Timestamp.now().isoformat()
+            "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
         print(f"Error fetching live price for {symbol}: {e}")
@@ -133,11 +91,11 @@ def compare_stocks():
                     "symbol": symbol,
                     "recommendation": result["recommendation"],
                     "risk": result["risk"]["level"],
-                    "score": result["recommendation"]["total_score"]
+                    "score": result["recommendation"].get("signal_strength", 0)
                 })
         
-        # מיון לפי ציון
-        results.sort(key=lambda x: x["score"], reverse=True)
+        if results:
+            results.sort(key=lambda x: x["score"], reverse=True)
         
         return jsonify({
             "comparison": results,
