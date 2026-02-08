@@ -87,38 +87,42 @@ class StockDataFetcher:
                 
                 # תאריך (יכול להיות ISO או Timestamp)
                 published_at = story.get('pubDate', story.get('providerPublishTime', ''))
+                if not published_at:
+                    # Try to find date in different spots
+                    published_at = story.get('published_at', '')
+                    
                 if isinstance(published_at, int):
-                    published_at = datetime.fromtimestamp(published_at).strftime('%Y-%m-%d %H:%M')
+                    # Convert timestamp to human readable
+                    dt = datetime.fromtimestamp(published_at)
+                    published_at = dt.strftime('%d.%m.%Y')
+                elif isinstance(published_at, str) and published_at:
+                    try:
+                        dt = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+                        published_at = dt.strftime('%d.%m.%Y')
+                    except: pass
                 
                 formatted_news.append({
                     'title': title,
-                    'publisher': story.get('provider', {}).get('displayName', 'Market News'),
+                    'publisher': story.get('provider', {}).get('displayName', story.get('source', 'Market News')),
                     'link': story.get('clickThroughUrl', {}).get('url', story.get('link', '#')),
-                    'published': published_at,
+                    'published': published_at if published_at else 'היום',
                     'type': 'STORY'
                 })
         return formatted_news
 
     def get_batch_quotes(self, symbols):
-        """קבלת מחירים בזמן אמת עבור קבוצת מניות"""
+        """קבלת מחירים ונתונים פונדמנטליים עבור קבוצת מניות בבקשה אחת"""
         if isinstance(symbols, list):
             symbols_str = ",".join(symbols)
         else:
             symbols_str = symbols
             
-        res = self._get(f"quote/{symbols_str}")
-        if res:
-            # Handle list vs dict vs result nesting
-            data = res
-            if isinstance(res, dict) and 'result' in res:
-                data = res['result']
-            elif isinstance(res, dict) and 'quoteResponse' in res:
-                data = res['quoteResponse'].get('result', [])
-                
-            if isinstance(data, dict):
-                return [data]
-            if isinstance(data, list):
-                return data
+        # שימוש בפרמטר symbols במקום בנתיב ה-URL (זה הפורמט שנתמך ב-finance-query לסימולים מרובים)
+        res = self._get("quotes", params={'symbols': symbols_str})
+        if res and 'quotes' in res:
+            quotes_dict = res['quotes']
+            # המרה לרשימה של אובייקטים (שומר על תאימות לקוד הקיים)
+            return list(quotes_dict.values())
         return []
 
     def get_market_summary(self):
@@ -229,7 +233,7 @@ class RecommendationEngine:
             "signal_strength": total_score
         }
 
-    def _generate_detailed_analysis(self, symbol, df, technical, risk, fundamental):
+    def _generate_detailed_analysis(self, symbol, df, technical, risk, fundamental, overview):
         trend_he = {
             "Strong Uptrend": "מגמת עלייה חזקה מאוד",
             "Uptrend": "מגמת עלייה",
@@ -242,18 +246,46 @@ class RecommendationEngine:
         momentum = technical.get('momentum', 'N/A')
         momentum_he = "חיובי" if momentum == "Overbought" else "שלילי" if momentum == "Oversold" else "נייטרלי"
         
+        # בניית רשימת יתרונות וחסרונות (PROS & CONS)
+        pros = []
+        cons = []
+        
+        # איסוף נקודות חוזק
+        if technical.get('trend') in ["Strong Uptrend", "Uptrend"]:
+            pros.append("המחיר נמצא במגמת עלייה ונתמך על ידי ממוצעים נעים.")
+        if fundamental.get('score', 0) > 1:
+            pros.append(f"מכפיל הרווח ({overview.get('pe_ratio', 'N/A')}) נחשב לאטרקטיבי יחסית לממוצע.")
+        if overview.get('dividend_yield', 0) and overview.get('dividend_yield') != 'N/A' and float(overview.get('dividend_yield')) > 0.02:
+            pros.append(f"סביבת דיבידנד יציבה ({float(overview.get('dividend_yield'))*100:.1f}%).")
+            
+        # איסוף נקודות אזהרה
+        if technical.get('momentum') == "Overbought":
+            cons.append("המניה במצב 'קניית יתר' (Overbought), ייתכן תיקון טכני בקרוב.")
+        if risk.get('level') == "High":
+            cons.append(f"תנודתיות גבוהה ({risk.get('volatility')}), מה שמעלה את רמת הסיכון למשקיעים זהירים.")
+        if fundamental.get('score', 0) < 0:
+            cons.append("הערכת השווי נראית גבוהה מדי ביחס לרווחים הנוכחיים.")
+
         analysis = [
-            f"**ניתוח מקיף עבור {symbol}:**",
-            f"המניה נמצאת כרגע ב{trend_he}. מבחינה טכנית, המומנטום הוא {momentum_he}.",
-            f"רמת הסיכון הכוללת היא **{risk.get('level')}**, עם תנודתיות שנתית של {risk.get('volatility')}."
+            f"### 📊 ניתוח מקצועי עבור {symbol}",
+            f"המניה נסחרת ב**{trend_he}**. האינדיקטורים הטכניים מראים שהמומנטום כרגע הוא **{momentum_he}**.",
+            "",
+            "#### ✅ נקודות חוזק (Pros):",
+            "\n".join([f"* {p}" for p in pros]) if pros else "* לא נמצאו יתרונות בולטים בטווח המיידי.",
+            "",
+            "#### ⚠️ נקודות תורפה (Cons):",
+            "\n".join([f"* {c}" for c in cons]) if cons else "* לא נמצאו נורות אזהרה קריטיות.",
+            "",
+            "#### 💡 דעת אנליסטים ותחזית:",
+            f"בהתבסס על הנתונים, רמת הסיכון היא **{risk.get('level')}**. ",
         ]
         
         if fundamental.get('score', 0) > 0:
-            analysis.append("הנתונים הפונדמנטליים מצביעים על חוסן כלכלי יחסי או הערכת חסר בשוק.")
+            analysis.append("אלמנטים פונדמנטליים מצביעים על חברה יציבה עם פוטנציאל ארוך טווח.")
         elif fundamental.get('score', 0) < 0:
-            analysis.append("קיימות נורות אזהרה בנתונים הפונדמנטליים, ייתכן שהמניה יקרה מדי כרגע.")
+            analysis.append("מומלץ לנהוג בזהירות יתרה בשל תמחור יתר או חולשה בנתונים הכספיים.")
             
-        analysis.append(f"לסיכום, אסטרטגיית ההשקעה המומלצת לדעתנו היא **{rec_map(symbol, technical, fundamental)}**.")
+        analysis.append(f"\n**לסיכום:** המלצתנו היא **{rec_map(symbol, technical, fundamental)}**.")
         
         return "\n".join(analysis)
 
@@ -282,7 +314,36 @@ class RiskAssessor:
             return {"level": "Moderate", "volatility": "N/A", "factors": []}
 
     def analyze_investment_strategy(self, df, risk):
-        return {"strategy": "DCA", "recommendation_he": "מומלץ להשקיע במנות קטנות (DCA) כדי למצע מחיר בשל תנודתיות השוק."}
+        """ניתוח אסטרטגיית השקעה אמיתי המבוסס על מצב השוק"""
+        if df is None or len(df) < 20:
+            return {"strategy": "N/A", "recommendation_he": "אין מספיק נתונים לחישוב אסטרטגיה."}
+            
+        # חישוב תנודתיות ב-20 הימים האחרונים (ATR Proxy)
+        last_20 = df.iloc[-20:]
+        recent_std = last_20['close'].pct_change().std() * (252**0.5)
+        avg_std = df['close'].pct_change().std() * (252**0.5)
+        
+        # האם התנודתיות כרגע חריגה?
+        volatility_ratio = recent_std / avg_std if avg_std > 0 else 1
+        
+        strategy = ""
+        text = ""
+        
+        if volatility_ratio > 1.3:
+            strategy = "DCA (מנות קטנות)"
+            text = "בשל התנודתיות הגבוהה כרגע (גבוהה ב-{:.0f}% מהרגיל), מומלץ להימנע מכניסה בסכום חד פעמי. הצורה החכמה ביותר היא כניסה הדרגתית (DCA) לאורך 3-6 חודשים כדי למצע את מחיר הקנייה.".format((volatility_ratio-1)*100)
+        elif risk['level'] == "Low" and df['close'].iloc[-1] > df['close'].rolling(200).mean().iloc[-1]:
+            strategy = "Lump Sum (סכום חד פעמי)"
+            text = "המניה מציגה יציבות גבוהה ומגמה שורית חזקה מעל הממוצע ל-200 יום. בהתחשב ברמת הסיכון הנמוכה, ניתן לשקול כניסה משמעותית יותר (Lump Sum) במחיר הנוכחי."
+        else:
+            strategy = "Aggressive DCA"
+            text = "המניה נמצאת בשלב של חיפוש כיוון או תיקון מסוים. מומלץ לקנות את ה-Dips (ירידות חדות) במנות כפולות, אך לשמור על זהירות עד להיערכות מחדש של המגמה הטכנית."
+            
+        return {
+            "strategy": strategy,
+            "recommendation_he": text,
+            "volatility": f"{recent_std*100:.1f}"
+        }
 
 class StockAnalysisSystem:
     def __init__(self):
@@ -393,7 +454,7 @@ class StockAnalysisSystem:
             
             # 5. ניתוח מפורט
             detailed_explanation = self.recommender._generate_detailed_analysis(
-                symbol, df, technical_signals, risk_assessment, fundamental_analysis
+                symbol, df, technical_signals, risk_assessment, fundamental_analysis, overview
             )
 
             # 6. בניית התוצאה הסופית
@@ -439,54 +500,101 @@ class StockAnalysisSystem:
             traceback.print_exc()
             return {"error": str(e)}
 
-    def scan_market_cached(self, limit=30):
-        """סריקת שוק מהירה עם מטמון מקומי"""
+    def scan_market_cached(self, limit=40):
+        """סריקת שוק עמוקה עם ניתוח רב-ממדי (פונדמנטלי + טכני)"""
         cache_file = "scan_cache.json"
         
-        # 1. ניסיון קריאה מהמטמון
+        # 1. ניסיון קריאה מהמטמון (תוקף ל-15 דקות לנתוני שוק חיים)
         try:
             if os.path.exists(cache_file):
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     cache_data = json.load(f)
                     timestamp = datetime.fromisoformat(cache_data["timestamp"])
-                    if datetime.now() - timestamp < timedelta(minutes=30):
+                    if datetime.now() - timestamp < timedelta(minutes=15):
                         print("🚀 Returning cached market scan results")
                         return cache_data["results"]
         except: pass
 
-        # 2. הרצת סריקה חדשה
-        print(f"🔍 Performing fresh market scan for top {limit} stocks...")
-        symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "NVDA", "BRK-B", "JPM", "V", 
-                   "WMT", "JNJ", "PG", "MA", "HD", "DIS", "NFLX", "ADBE", "CRM", "PYPL",
-                   "INTC", "AMD", "CSCO", "PEP", "KO", "ORCL", "COST", "ACN", "AVGO", "TXN"][:limit]
+        # 2. רשימת מניות גלובלית מורחבת
+        symbols = [
+            "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AVGO", "ADBE", "NFLX", # US Tech
+            "TSM", "ASML", "SAP", "BABA", "NVO", "SNY", "TM", "HMC", "SONY", "TTE", # Global
+            "JPM", "V", "MA", "WMT", "COST", "PG", "JNJ", "HD", "DIS", "PYPL", # US Traditional
+            "LLY", "UNH", "XOM", "CVX", "ABBV", "PEP", "KO", "BAC", "VZ", "T" # More US
+        ][:limit]
         
+        print(f"🔍 Performing DEEP market scan for {len(symbols)} stocks...")
         quotes = self.fetcher.get_batch_quotes(symbols)
         recommendations = []
         
         for q in quotes:
             symbol = q.get('symbol', 'Unknown')
             price = q.get('regularMarketPrice', 0)
-            change = q.get('regularMarketChangePercent', 0)
+            change_pct = q.get('regularMarketChangePercent', 0)
+            sma_50 = q.get('fiftyDayAverage', 0)
+            sma_200 = q.get('twoHundredDayAverage', 0)
+            low_52w = q.get('fiftyTwoWeekLow', price)
+            high_52w = q.get('fiftyTwoWeekHigh', price)
+            pe = q.get('trailingPE', 0)
+            yield_val = q.get('trailingAnnualDividendYield', 0)
             
-            # לוודא שיש נתונים בסיסיים לחישוב מגמה
-            trend = "Uptrend" if change > 0 else "Downtrend"
-            if abs(change) > 3: trend = f"Strong {trend}"
+            # --- Deep Technical Analysis ---
+            # מחיר מעל ממוצע 200 זה סימן שורי לטווח ארוך
+            is_bullish_long = price > sma_200 if sma_200 else False
+            trend = "Uptrend" if price > sma_50 else "Downtrend"
+            if price > sma_50 * 1.05: trend = "Strong Uptrend"
+            if price < sma_50 * 0.95: trend = "Strong Downtrend"
             
-            # ציון פשוט (0-5)
-            score = 1
-            if change > 0: score += 1
-            if change > 2: score += 1
+            # RSI Proxy (0-100) based on 52w high/low
+            range_52w = high_52w - low_52w
+            rsi_proxy = ((price - low_52w) / range_52w * 100) if range_52w > 0 else 50
+            
+            # --- Advanced Scoring System (-5 to +5) ---
+            score = 0
+            
+            # Momentum Factors
+            if change_pct > 0: score += 1
+            if change_pct > 2: score += 1
+            if trend == "Strong Uptrend": score += 1
+            if is_bullish_long: score += 1
+            
+            # Value Factors
+            if 0 < pe < 18: score += 2 # Strong Value
+            elif 18 <= pe < 30: score += 1 # Fair Value
+            elif pe > 45: score -= 2 # Very Overvalued
+            
+            # Contrarian Factor (BUY the dip)
+            if rsi_proxy < 25: score += 2 # Oversold - opportunity
+            if rsi_proxy > 85: score -= 1 # Overbought - risky
+            
+            # Dividend / Stability
+            if yield_val and yield_val > 0.02: score += 1
+            
+            # Final Recommendation Mapping
+            short_term = "Hold"
+            if score >= 4: short_term = "Strong Buy"
+            elif score >= 1: short_term = "Buy"
+            elif score <= -2: short_term = "Strong Sell"
+            elif score <= -1: short_term = "Sell"
             
             recommendations.append({
                 "symbol": symbol,
-                "name": q.get('shortName', symbol),
+                "name": q.get('longName', q.get('shortName', symbol)),
                 "price": price,
-                "change": change,
+                "change": change_pct,
                 "trend": trend,
+                "rsi": rsi_proxy,
+                "pe": pe if pe else "N/A",
+                "yield": (yield_val * 100) if yield_val else 0,
                 "score": score,
-                "rsi": "N/A" # בשביל ה-fast scan לא נחשב RSI עכשיו
+                "short_term": short_term,
+                "long_term": "Buy" if (score >= 2 or (is_bullish_long and score >= 0)) else "Hold",
+                "risk": "High" if abs(change_pct) > 3 or rsi_proxy > 80 else "Low" if (not is_bullish_long and rsi_proxy < 30) else "Moderate"
             })
             
+        # מיון לפי ציון
+        recommendations.sort(key=lambda x: x["score"], reverse=True)
+
         # 3. שמירה למטמון
         try:
             with open(cache_file, 'w', encoding='utf-8') as f:

@@ -191,7 +191,14 @@
             <div class="charts-container">
                 <div class="chart-card">
                     <div class="chart-header">
-                        <h3>📈 גרף מחירים (90 ימים אחרונים)</h3>
+                        <h3>📈 גרף מחירים</h3>
+                        <div class="chart-range-selector" id="chartRangeTabs">
+                            <button class="range-btn" data-range="1d">יום</button>
+                            <button class="range-btn" data-range="5d">5 ימ'</button>
+                            <button class="range-btn active" data-range="3mo">3 חו'</button>
+                            <button class="range-btn" data-range="1y">שנה</button>
+                            <button class="range-btn" data-range="5y">5 שנ'</button>
+                        </div>
                     </div>
                     <div class="chart-wrapper">
                         <canvas id="priceChart"></canvas>

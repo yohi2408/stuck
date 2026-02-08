@@ -36,7 +36,17 @@ def analyze_stock(symbol):
     """ניתוח מניה בודדת"""
     try:
         symbol = symbol.upper()
+        # אפשרות לבחירת טווח גרף (1d, 5d, 1mo, 6mo, 1y, 5y)
+        chart_range = request.args.get('range', '3mo')
+        
         result = analyzer.analyze_stock(symbol)
+        
+        # אם ביקשו טווח ספציפי, נעדכן את הנתונים (מערכת ה-StockDataFetcher כבר תומכת בפרמטר range)
+        if chart_range != '5y': # 5y הוא הדיפולט של המנתח הפנימי
+            df = analyzer.fetcher.get_stock_data(symbol, range=chart_range)
+            if df is not None and not df.empty:
+                df = analyzer.technical.calculate_indicators(df)
+                result['chart_data'] = analyzer._prepare_chart_data(df)
         
         if "error" in result:
             return jsonify({"error": result["error"]}), 404
@@ -113,19 +123,29 @@ def get_recommendations():
         # שימוש בשיטה החדשה והמהירה שפועלת ב-Batch ועם Cache
         recommendations = analyzer.scan_market_cached(limit=40)
         
-        # חלוקה לקטגוריות
-        short_term_hot = [r for r in recommendations if r["score"] >= 2][:10]
-        long_term_best = recommendations[:10] # Top scorers
-        high_momentum = [r for r in recommendations if "Uptrend" in r["trend"]][:10]
+        # חלוקה לקטגוריות חכמות יותר
+        # 1. Hot Picks - שילוב של מומנטום וציון כללי גבוה
+        short_term_hot = [r for r in recommendations if r["score"] >= 2][:12]
+        
+        # 2. Value/Safe Picks - מכפיל נמוך או קרקע יציבה
+        safe_picks = [r for r in recommendations if (isinstance(r["pe"], (int, float)) and r["pe"] < 15) or r["rsi"] < 35][:8]
+        
+        # 3. Long Term - המלצות שוריות לטווח ארוך
+        long_term_best = [r for r in recommendations if r["long_term"] == "Buy"][:12]
+        
+        # 4. Momentum - מניות בפריצה או במגמה חזקה
+        high_momentum = [r for r in recommendations if "Strong Uptrend" in r["trend"]][:10]
+        if not high_momentum:
+            high_momentum = [r for r in recommendations if "Uptrend" in r["trend"]][:10]
         
         return jsonify({
             "short_term": {
                 "hot_picks": short_term_hot,
-                "safe_picks": [r for r in short_term_hot if r["rsi"] != "N/A" and r["rsi"] < 50][:5]
+                "safe_picks": safe_picks
             },
             "long_term": {
                 "best_picks": long_term_best,
-                "stable_picks": [r for r in long_term_best if r["rsi"] != "N/A" and r["rsi"] < 45][:5]
+                "stable_picks": [r for r in long_term_best if r["rsi"] < 50][:6]
             },
             "high_momentum": high_momentum,
             "total_analyzed": len(recommendations),
