@@ -86,6 +86,7 @@ async function analyzeStock() {
 
     showLoading(true);
     hideError();
+    stopLiveUpdates(); // Stop previous stock's updates immediately
     document.getElementById('dashboard').classList.add('hidden');
 
     try {

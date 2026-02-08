@@ -434,7 +434,10 @@ class StockAnalysisSystem:
     def _prepare_chart_data(self, df):
         if df is None or df.empty: return {"dates": [], "prices": [], "sma_20": [], "sma_50": []}
         try:
-            # הכנה של נתונים גם לגרף קווי וגם לגרף נרות
+            # הבטחת פורמט תאריכים תקין
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index)
+                
             return {
                 "dates": df.index.strftime('%Y-%m-%d').tolist(),
                 "prices": df['close'].tolist(),
@@ -444,12 +447,12 @@ class StockAnalysisSystem:
                 "support": float(df['support_level'].iloc[-1]) if 'support_level' in df.columns else None,
                 "candles": [
                     {
-                        "t": row.index.strftime('%Y-%m-%d'),
+                        "t": idx.strftime('%Y-%m-%d'),
                         "o": float(row.open),
                         "h": float(row.high),
                         "l": float(row.low),
                         "c": float(row.close)
-                    } for _, row in df.iterrows()
+                    } for idx, row in df.iterrows()
                 ]
             }
         except Exception as e:
